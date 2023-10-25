@@ -37,6 +37,8 @@ HWND_BROADCAST:=0xFFFF
 Frequency:=523
 Period:=2000
 lastHKL:=0
+;"c:\Program Files\uvnc bvba\UltraVNC\vncviewer.exe" 
+uvnc:="ahk_class VNCMDI_Window"
 
 TrayIcon
 SetTimer () => TrayIcon(), Period
@@ -61,8 +63,7 @@ Lang(ItemPos){
 
 Item(ItemName, ItemPos, MyMenu) {
  sb:=Frequency*ItemPos
- ;"c:\Program Files\uvnc bvba\UltraVNC\vncviewer.exe" 
- if WinActive("ahk_class VNCMDI_Window") { 
+ if WinActive(uvnc) { 
   ItemPos:=1
  } else {
   ToolTip ItemName
@@ -93,11 +94,15 @@ ico(ItemPos){
 TrayIcon(){
  ToolTip
  curHKL:=GetCurrentKeyboardLayout()
- if lastHKL==curHKL
+ if WinActive(uvnc) && curHKL!=HKL[1]{ 
+  Lang 1
+  return
+ }
+ if lastHKL=curHKL
   return
  global lastHKL:=curHKL
  For i, v in HKL{
-  if v==curHKL{
+  if v=curHKL{
    ico i
    return
   }
