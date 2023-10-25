@@ -1,6 +1,6 @@
 # EnRu
-Another global keyboard layout switcher by clicking the left or right Ctrl key<br>
-Еще один глобальный переключатель раскладки клавиатуры щелчком левой или правой клавиши Ctrl
+Another global keyboard layout switch by clicking the left or right `Ctrl` key<br>
+Еще один глобальный переключатель раскладки клавиатуры щелчком левой или правой клавиши `Ctrl`
 
 ## Credits - благодарности:
 - Rudi De Vos, Sam Liarfo, Ludovic Bocquet - for [UltraVNC](https://uvnc.com/downloads/ultravnc.html)
@@ -25,5 +25,5 @@ Another global keyboard layout switcher by clicking the left or right Ctrl key<b
 Раньше какой бы VNC-сервер я не использовал пользовался VNC-вьювером от [RealVNC](https://www.realvnc.com/en/connect/download/viewer/)
 Он передавал VNC-серверу `Alt-TAB` и позволял переключать раскладку клавиатур когда на обеих компьютерах с VNC стоял один и тот же переключатель раскладок клавиатур.
 
- - But in the project [ngrokVNC](http://github.com/abakum/ngrokVNC) I had to use the encryption plugin and [UltraVNC\vncviewer](https://uvnc.com/docs/uvnc-viewer/71-viewer-gui.html), although it sent `Alt-TAB` to the VNC-server when `ScrollLock` was turned on, but it was necessary to have `en_US` layout on the VNC-viewer and `ru_Ru` layout on the VNC-server to transmit Cyrillic characters.<br>
-Но в проекте [ngrokVNC](http://github.com/abakum/ngrokVNC) потребовалось использовать плагин шифрования а [UltraVNC\vncviewer](https://uvnc.com/docs/uvnc-viewer/71-viewer-gui.html), хоть при включении `ScrollLock` и передавал `Alt-TAB` на VNC-сервер, но для передачи кириллицы нужно было чтоб на VNC-вьювере была расскладка `en_US` а на VNC-сервере `ru_Ru`
+ - But in the [ngrokVNC](http://github.com/abakum/ngrokVNC) project I had to use the encryption plugin and [UltraVNC\vncviewer](https://uvnc.com/docs/uvnc-viewer/71-viewer-gui.html ), which, when `ScrollLock` is enabled, can transmit `Alt-TAB` to the VNC-server, but it was necessary to have `en_US` layout on the VNC-viewer and `ru_Ru` layout on the VNC-server to transmit cyrillics.<br>
+Но в проекте [ngrokVNC](http://github.com/abakum/ngrokVNC) потребовалось использовать плагин шифрования и [UltraVNC\vncviewer](https://uvnc.com/docs/uvnc-viewer/71-viewer-gui.html), который при включении `ScrollLock` может передавать `Alt-TAB` на VNC-сервер, но для передачи кириллицы нужно чтоб на VNC-вьювере была расскладка `en_US` а на VNC-сервере `ru_Ru`
