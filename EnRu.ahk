@@ -9,7 +9,7 @@ Another global keyboard layout switcher by clicking the left or right Ctrl key<b
 - Press and release the right `Ctrl` key to switch the keyboard layout to `ru_Ru`, but if the [UltraVNC\vncviewer](https://uvnc.com/docs/uvnc-viewer/71-viewer-gui.html) window is active, the local keyboard layout will be `en_US`.<br>
 Нажми и отпусти правую клавишу `Ctrl` чтоб переключить раскладку клавиатуры на `ru_Ru`, но если активно окно с [UltraVNC\vncviewer](https://uvnc.com/docs/uvnc-viewer/71-viewer-gui.html) то раскладка локальной клавиатуры будет `en_US`
 
-git tag v0.1.4-lw
+git tag v0.2.1-lw
 git push origin --tags
 */
 
@@ -29,14 +29,17 @@ git push origin --tags
 WM_INPUTLANGCHANGEREQUEST:=0x0050
 KLID:=["00000409", "00000419"]
 EnRu:=["En","Ru"]
+HKL:=[0x04090409, 0x04190419]
 ;https://learn.microsoft.com/en-us/windows/win32/api/winuser/nf-winuser-loadkeyboardlayouta
 KLF_ACTIVATE:=1
 ;https://learn.microsoft.com/en-us/windows/win32/api/winuser/nf-winuser-postmessagea
 HWND_BROADCAST:=0xFFFF
 Frequency:=523
-Timer:=-500
+Period:=2000
+lastHKL:=0
 
-Lang 1
+TrayIcon
+SetTimer () => TrayIcon(), Period
 
 ~LControl up::{
  if "LControl"=A_PriorKey
@@ -53,7 +56,7 @@ A_TrayMenu.Insert "1&", EnRu[2], Item
 A_TrayMenu.Insert "1&", EnRu[1], Item
 
 Lang(ItemPos){
-  Item EnRu[ItemPos], ItemPos, A_TrayMenu
+ Item EnRu[ItemPos], ItemPos, A_TrayMenu
 }
 
 Item(ItemName, ItemPos, MyMenu) {
@@ -63,15 +66,40 @@ Item(ItemName, ItemPos, MyMenu) {
   ItemPos:=1
  } else {
   ToolTip ItemName
-  SetTimer () => ToolTip(), Timer
+ }
+ lastHKL:= DllCall("LoadKeyboardLayout", "Str", KLID[ItemPos], "uint", KLF_ACTIVATE)
+ PostMessage WM_INPUTLANGCHANGEREQUEST, , lastHKL, , HWND_BROADCAST
+ ico ItemPos
+ SoundBeep sb
 }
+
+GetCurrentKeyboardLayout() {
+ hwnd:=DllCall("GetForegroundWindow")
+ if hwnd==0
+  return 0
+ return DllCall("GetKeyboardLayout", "UInt", DllCall("GetWindowThreadProcessId", "UInt", hwnd, "UInt", 0), "UInt")
+}
+
+ico(ItemPos){
  A_IconTip:=EnRu[ItemPos]
- PostMessage WM_INPUTLANGCHANGEREQUEST, , DllCall("LoadKeyboardLayout", "Str", KLID[ItemPos], "uint", KLF_ACTIVATE), , HWND_BROADCAST
  ;@Ahk2Exe-IgnoreBegin
   TraySetIcon ItemPos ".ico"
  ;@Ahk2Exe-IgnoreEnd
  /*@Ahk2Exe-Keep
   TraySetIcon A_ScriptName, -(159+ItemPos)
  */
- SoundBeep sb
+}
+
+TrayIcon(){
+ ToolTip
+ curHKL:=GetCurrentKeyboardLayout()
+ if lastHKL==curHKL
+  return
+ global lastHKL:=curHKL
+ For i, v in HKL{
+  if v==curHKL{
+   ico i
+   return
+  }
+ }
 }
