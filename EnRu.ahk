@@ -22,7 +22,7 @@ git push origin --tags
 ;@Ahk2Exe-SetCopyright Abakum
 ;@Ahk2Exe-SetProductVersion v0.1.4-lw
 ;@Ahk2Exe-SetDescription Changing the input language by clicking the left or right `Ctrl`
-; @Ahk2Exe-UseResourceLang 0x0419
+; @Ahk2Exe-SetLanguage 0x0419
 ; @Ahk2Exe-SetDescription Смена языка ввода по клику левого или правого `Ctrl`
 
 ;https://learn.microsoft.com/en-us/windows/win32/winmsg/wm-inputlangchangerequest
