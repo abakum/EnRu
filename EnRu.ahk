@@ -35,7 +35,7 @@ HWND_BROADCAST:=0xFFFF
 uvnc:="ahk_class VNCMDI_Window"
 
 Frequency:=523
-Period:=2000
+Period:=2 ;set negative to stop polling
 lastHKL:=0
 
 EnRu:=[] ;["us","ru"]
@@ -49,7 +49,7 @@ Loop Reg, "HKCU\Keyboard Layout\Preload"{
 }
 
 TrayIcon
-SetTimer () => TrayIcon(), Period
+SetTimer () => TrayIcon(), Abs(Period)*1000
 
 ~LControl up::{
  if "LControl"=A_PriorKey{
@@ -105,6 +105,8 @@ icon(ItemPos){
 
 TrayIcon(){
  ToolTip
+ if Period<0 && lastHKL>0
+  return
  curHKL:=GetCurrentKeyboardLayout()
  if WinActive(uvnc) && curHKL!=HKL[1]{ 
   Lang 1
