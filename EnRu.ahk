@@ -9,48 +9,60 @@ Another global keyboard layout switcher by clicking the left or right Ctrl key<b
 - Press and release the right `Ctrl` key to switch the keyboard layout to `ru_Ru`, but if the [UltraVNC\vncviewer](https://uvnc.com/docs/uvnc-viewer/71-viewer-gui.html) window is active, the local keyboard layout will be `en_US`.<br>
 Нажми и отпусти правую клавишу `Ctrl` чтоб переключить раскладку клавиатуры на `ru_Ru`, но если активно окно с [UltraVNC\vncviewer](https://uvnc.com/docs/uvnc-viewer/71-viewer-gui.html) то раскладка локальной клавиатуры будет `en_US`
 
-git tag v0.2.1-lw
+git tag v0.3.1-lw
 git push origin --tags
 */
 
 #Requires AutoHotkey v2.0
 #SingleInstance
-;@Ahk2Exe-SetMainIcon EnRu.ico
+;@Ahk2Exe-SetMainIcon 0.ico
 ;@Ahk2Exe-AddResource 1.ico, 160
 ;@Ahk2Exe-AddResource 2.ico, 161
 ;@Ahk2Exe-SetName EnRu
 ;@Ahk2Exe-SetCopyright Abakum
-;@Ahk2Exe-SetProductVersion v0.1.4-lw
+;@Ahk2Exe-SetProductVersion v0.3.1-lw
 ;@Ahk2Exe-SetDescription Changing the input language by clicking the left or right `Ctrl`
 ; @Ahk2Exe-SetLanguage 0x0419
 ; @Ahk2Exe-SetDescription Смена языка ввода по клику левого или правого `Ctrl`
 
 ;https://learn.microsoft.com/en-us/windows/win32/winmsg/wm-inputlangchangerequest
 WM_INPUTLANGCHANGEREQUEST:=0x0050
-KLID:=["00000409", "00000419"]
-EnRu:=["En","Ru"]
-HKL:=[0x04090409, 0x04190419]
 ;https://learn.microsoft.com/en-us/windows/win32/api/winuser/nf-winuser-loadkeyboardlayouta
 KLF_ACTIVATE:=1
 ;https://learn.microsoft.com/en-us/windows/win32/api/winuser/nf-winuser-postmessagea
 HWND_BROADCAST:=0xFFFF
+;"c:\Program Files\uvnc bvba\UltraVNC\vncviewer.exe" 
+uvnc:="ahk_class VNCMDI_Window"
+
 Frequency:=523
 Period:=2000
 lastHKL:=0
-;"c:\Program Files\uvnc bvba\UltraVNC\vncviewer.exe" 
-uvnc:="ahk_class VNCMDI_Window"
+
+EnRu:=[] ;["us","ru"]
+KLID:=[] ;["00000409", "00000419"]
+HKL:=[] ;[0x04090409, 0x04190419]
+Loop Reg, "HKCU\Keyboard Layout\Preload"{
+  KLID.Push RegRead()
+  ; EnRu.Push RegRead("HKLM\SYSTEM\CurrentControlSet\Control\Keyboard Layouts\" KLID[A_Index], "Layout Text") ; ["US", "Russian"]
+  EnRu.Push RegRead("HKLM\SYSTEM\CurrentControlSet\Control\Keyboard Layout\DosKeybCodes" , KLID[A_Index])
+  HKL.Push DllCall("LoadKeyboardLayout", "Str", KLID[A_Index], "uint", 0)
+}
 
 TrayIcon
 SetTimer () => TrayIcon(), Period
 
 ~LControl up::{
- if "LControl"=A_PriorKey
+ if "LControl"=A_PriorKey{
   Lang 1
+  SoundBeep Frequency*1
+ }
 }
 
 ~RControl up::{
- if "RControl"=A_PriorKey
+ if "RControl"=A_PriorKey{
   Lang 2
+  SoundBeep Frequency*2
+ }
 }
 
 A_TrayMenu.Insert "1&"
@@ -62,16 +74,13 @@ Lang(ItemPos){
 }
 
 Item(ItemName, ItemPos, MyMenu) {
- sb:=Frequency*ItemPos
- if WinActive(uvnc) { 
+ if WinActive(uvnc) 
   ItemPos:=1
- } else {
+ else
   ToolTip ItemName
- }
- lastHKL:= DllCall("LoadKeyboardLayout", "Str", KLID[ItemPos], "uint", KLF_ACTIVATE)
+ global lastHKL:=DllCall("LoadKeyboardLayout", "Str", KLID[ItemPos], "uint", KLF_ACTIVATE)
  PostMessage WM_INPUTLANGCHANGEREQUEST, , lastHKL, , HWND_BROADCAST
- ico ItemPos
- SoundBeep sb
+ icon ItemPos
 }
 
 GetCurrentKeyboardLayout() {
@@ -81,8 +90,11 @@ GetCurrentKeyboardLayout() {
  return DllCall("GetKeyboardLayout", "UInt", DllCall("GetWindowThreadProcessId", "UInt", hwnd, "UInt", 0), "UInt")
 }
 
-ico(ItemPos){
- A_IconTip:=EnRu[ItemPos]
+icon(ItemPos){
+  if ItemPos=0
+    A_IconTip:=""
+  else
+   A_IconTip:=EnRu[ItemPos]
  ;@Ahk2Exe-IgnoreBegin
   TraySetIcon ItemPos ".ico"
  ;@Ahk2Exe-IgnoreEnd
@@ -103,8 +115,9 @@ TrayIcon(){
  global lastHKL:=curHKL
  For i, v in HKL{
   if v=curHKL{
-   ico i
+   icon i
    return
   }
  }
+ icon 0
 }

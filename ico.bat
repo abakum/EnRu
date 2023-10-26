@@ -97,14 +97,14 @@ goto :EOF
 
 
 :aa
-ffmpeg -i %v%1.ico -i %v%2.ico -filter_complex [0]crop=iw/2-1:ih:0:0[l];[1]crop=iw/2+1:ih:0:0[r];[l][r]hstack -y %v%EnRu.ico
+ffmpeg -i %v%1.ico -i %v%2.ico -filter_complex [0]crop=iw/2-1:ih:0:0[l];[1]crop=iw/2+1:ih:0:0[r];[l][r]hstack -y %v%0.ico
 goto :EOF
 
 :bb
-ffmpeg -i %v%1.ico -i %v%2.ico -filter_complex [0]crop=iw/2-1:ih:0:0[l];[1]crop=iw/2+1:ih:iw/2-1:0[r];[l][r]hstack -y %v%EnRu.ico
+ffmpeg -i %v%1.ico -i %v%2.ico -filter_complex [0]crop=iw/2-1:ih:0:0[l];[1]crop=iw/2+1:ih:iw/2-1:0[r];[l][r]hstack -y %v%0.ico
 goto :EOF
 
 :cc
-ffmpeg -i %v%1.ico -i %v%2.ico -filter_complex [0]crop=iw/2:ih:0:0[l];[1]crop=iw/2:ih:iw/2:0[r];[l][r]hstack -y %v%EnRu.ico
+ffmpeg -i %v%1.ico -i %v%2.ico -filter_complex [0]crop=iw/2:ih:0:0[l];[1]crop=iw/2:ih:iw/2:0[r];[l][r]hstack -y %v%0.ico
 goto :EOF
 
