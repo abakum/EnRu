@@ -42,10 +42,9 @@ EnRu:=[] ;["us","ru"]
 KLID:=[] ;["00000409", "00000419"]
 HKL:=[] ;[0x04090409, 0x04190419]
 Loop Reg, "HKCU\Keyboard Layout\Preload"{
-  KLID.Push RegRead()
-  ; EnRu.Push RegRead("HKLM\SYSTEM\CurrentControlSet\Control\Keyboard Layouts\" KLID[A_Index], "Layout Text") ; ["US", "Russian"]
-  EnRu.Push RegRead("HKLM\SYSTEM\CurrentControlSet\Control\Keyboard Layout\DosKeybCodes" , KLID[A_Index])
-  HKL.Push DllCall("LoadKeyboardLayout", "Str", KLID[A_Index], "uint", 0)
+ KLID.Push RegRead("HKCU\Keyboard Layout\Preload", A_Index)
+ EnRu.Push RegRead("HKLM\SYSTEM\CurrentControlSet\Control\Keyboard Layout\DosKeybCodes" , KLID[A_Index])
+ HKL.Push DllCall("LoadKeyboardLayout", "Str", KLID[A_Index], "uint", 0)
 }
 
 TrayIcon
