@@ -20,7 +20,7 @@ git push origin --tags
 ;@Ahk2Exe-AddResource 2.ico, 161
 ;@Ahk2Exe-SetName EnRu
 ;@Ahk2Exe-SetCopyright Abakum
-;@Ahk2Exe-SetProductVersion v0.3.1-lw
+;@Ahk2Exe-SetProductVersion v0.4.2-lw
 ;@Ahk2Exe-SetDescription Changing the input language by clicking the left or right `Ctrl`
 ; @Ahk2Exe-SetLanguage 0x0419
 ; @Ahk2Exe-SetDescription Смена языка ввода по клику левого или правого `Ctrl`
@@ -80,7 +80,7 @@ Item(ItemName, ItemPos, MyMenu) {
    ToolTip ItemName
  hwnd:=DllCall("GetForegroundWindow")
  ;https://learn.microsoft.com/en-us/windows/win32/api/winuser/nf-winuser-getancestor
- ;if WinGetClass(hwnd)="#32770"
+ ;if WinGetClass(hwnd)="#32770" ;dialog
    hwnd:=DllCall("GetAncestor","UInt", hwnd, "UInt", GA_ROOTOWNER)
  if hwnd=0
   hwnd:=HWND_BROADCAST
