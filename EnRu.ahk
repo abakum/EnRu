@@ -9,7 +9,7 @@ Another global keyboard layout switcher by clicking the left or right Ctrl key<b
 - Press and release the right `Ctrl` key to switch the keyboard layout to `ru_Ru`, but if the [UltraVNC\vncviewer](https://uvnc.com/docs/uvnc-viewer/71-viewer-gui.html) window is active, the local keyboard layout will be `en_US`.<br>
 Нажми и отпусти правую клавишу `Ctrl` чтоб переключить раскладку клавиатуры на `ru_Ru`, но если активно окно с [UltraVNC\vncviewer](https://uvnc.com/docs/uvnc-viewer/71-viewer-gui.html) то раскладка локальной клавиатуры будет `en_US`
 
-git tag v0.4.1-lw
+git tag v0.4.2-lw
 git push origin --tags
 */
 
@@ -31,6 +31,7 @@ WM_INPUTLANGCHANGEREQUEST:=0x0050
 KLF_ACTIVATE:=1
 ;https://learn.microsoft.com/en-us/windows/win32/api/winuser/nf-winuser-postmessagea
 HWND_BROADCAST:=0xFFFF
+GA_ROOTOWNER:=3
 ;"c:\Program Files\uvnc bvba\UltraVNC\vncviewer.exe" 
 uvnc:="ahk_class VNCMDI_Window"
 
@@ -44,7 +45,7 @@ HKL:=[] ;[0x04090409, 0x04190419]
 Loop Reg, "HKCU\Keyboard Layout\Preload"{
  KLID.Push RegRead("HKCU\Keyboard Layout\Preload", A_Index)
  EnRu.Push RegRead("HKLM\SYSTEM\CurrentControlSet\Control\Keyboard Layout\DosKeybCodes" , KLID[A_Index])
- HKL.Push DllCall("LoadKeyboardLayout", "Str", KLID[A_Index], "uint", 0)
+ HKL.Push DllCall("LoadKeyboardLayout", "Str", KLID[A_Index], "UInt", 0)
 }
 
 TrayIcon
@@ -76,17 +77,26 @@ Item(ItemName, ItemPos, MyMenu) {
  if WinActive(uvnc) 
   ItemPos:=1
  else
-  ToolTip ItemName
- global lastHKL:=DllCall("LoadKeyboardLayout", "Str", KLID[ItemPos], "uint", KLF_ACTIVATE)
- PostMessage WM_INPUTLANGCHANGEREQUEST, , lastHKL, , HWND_BROADCAST
+   ToolTip ItemName
+ hwnd:=DllCall("GetForegroundWindow")
+ ;https://learn.microsoft.com/en-us/windows/win32/api/winuser/nf-winuser-getancestor
+ ;if WinGetClass(hwnd)="#32770"
+   hwnd:=DllCall("GetAncestor","UInt", hwnd, "UInt", GA_ROOTOWNER)
+ if hwnd=0
+  hwnd:=HWND_BROADCAST
+ global lastHKL:=HKL[ItemPos]
+ PostMessage WM_INPUTLANGCHANGEREQUEST, , lastHKL, , hwnd
  icon ItemPos
 }
 
-GetCurrentKeyboardLayout() {
+GetKeyboardLayout() {
+ ;https://learn.microsoft.com/en-us/windows/win32/api/winuser/nf-winuser-getforegroundwindow
  hwnd:=DllCall("GetForegroundWindow")
- if hwnd==0
-  return 0
- return DllCall("GetKeyboardLayout", "UInt", DllCall("GetWindowThreadProcessId", "UInt", hwnd, "UInt", 0), "UInt")
+ ;https://learn.microsoft.com/en-us/windows/win32/api/winuser/nf-winuser-getkeyboardlayout
+ if hwnd!=0
+  ;https://learn.microsoft.com/en-us/windows/win32/api/winuser/nf-winuser-getwindowthreadprocessid
+  hwnd:=DllCall("GetWindowThreadProcessId", "UInt", hwnd, "UInt", 0)
+ return DllCall("GetKeyboardLayout", "UInt", hwnd, "UInt")
 }
 
 icon(ItemPos){
@@ -106,7 +116,7 @@ TrayIcon(){
  ToolTip
  if Period<0 && lastHKL>0
   return
- curHKL:=GetCurrentKeyboardLayout()
+ curHKL:=GetKeyboardLayout()
  if WinActive(uvnc) && curHKL!=HKL[1]{ 
   Lang 1
   return
