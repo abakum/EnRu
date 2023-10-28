@@ -9,9 +9,9 @@ Another global keyboard layout switcher by clicking the left or right Ctrl key<b
 - Press and release the right `Ctrl` key to switch the keyboard layout to `ru_Ru`, but if the [UltraVNC\vncviewer](https://uvnc.com/docs/uvnc-viewer/71-viewer-gui.html) window is active, the local keyboard layout will be `en_US`.<br>
 Нажми и отпусти правую клавишу `Ctrl` чтоб переключить раскладку клавиатуры на `ru_Ru`, но если активно окно с [UltraVNC\vncviewer](https://uvnc.com/docs/uvnc-viewer/71-viewer-gui.html) то раскладка локальной клавиатуры будет `en_US`
 
-git tag v0.4.2-lw
 git push origin --tags
 */
+;@Ahk2Exe-Let ProductVersion="v0.5.1-lw"
 
 #Requires AutoHotkey v2.0
 #SingleInstance
@@ -20,20 +20,19 @@ git push origin --tags
 ;@Ahk2Exe-AddResource 2.ico, 161
 ;@Ahk2Exe-SetName EnRu
 ;@Ahk2Exe-SetCopyright Abakum
-;@Ahk2Exe-SetProductVersion v0.4.2-lw
+;@Ahk2Exe-SetProductVersion %U_ProductVersion%
 ;@Ahk2Exe-SetDescription Changing the input language by clicking the left or right `Ctrl`
 ; @Ahk2Exe-SetLanguage 0x0419
 ; @Ahk2Exe-SetDescription Смена языка ввода по клику левого или правого `Ctrl`
+;@Ahk2Exe-PostExec git tag %U_ProductVersion%
 
 ;https://learn.microsoft.com/en-us/windows/win32/winmsg/wm-inputlangchangerequest
 WM_INPUTLANGCHANGEREQUEST:=0x0050
-;https://learn.microsoft.com/en-us/windows/win32/api/winuser/nf-winuser-loadkeyboardlayouta
-KLF_ACTIVATE:=1
-;https://learn.microsoft.com/en-us/windows/win32/api/winuser/nf-winuser-postmessagea
-HWND_BROADCAST:=0xFFFF
-GA_ROOTOWNER:=3
+;https://learn.microsoft.com/en-us/windows/win32/api/winuser/nf-winuser-getwindow
+GW_HWNDPREV:=3
 ;"c:\Program Files\uvnc bvba\UltraVNC\vncviewer.exe" 
-uvnc:="ahk_class VNCMDI_Window"
+uvnc:="VNCMDI_Window"
+
 
 Frequency:=523
 Period:=2 ;set negative to stop polling
@@ -69,36 +68,54 @@ A_TrayMenu.Insert "1&"
 A_TrayMenu.Insert "1&", EnRu[2], Item
 A_TrayMenu.Insert "1&", EnRu[1], Item
 
+;switch lang by index ItemPos
 Lang(ItemPos){
  Item EnRu[ItemPos], ItemPos, A_TrayMenu
 }
 
+;switch lang by menu
+;set lastHKL as HKL[ItemPos]
 Item(ItemName, ItemPos, MyMenu) {
- if WinActive(uvnc) 
+ hwnd:=DllCall("GetForegroundWindow", "Ptr")
+ if hwnd=0
+  return
+ class:=WinGetClass(hwnd)
+
+ if class==uvnc
   ItemPos:=1
  else
    ToolTip ItemName
- hwnd:=DllCall("GetForegroundWindow")
- ;https://learn.microsoft.com/en-us/windows/win32/api/winuser/nf-winuser-getancestor
- ;if WinGetClass(hwnd)="#32770" ;dialog
-   hwnd:=DllCall("GetAncestor","UInt", hwnd, "UInt", GA_ROOTOWNER)
+   
+ if class=="#32770" || class=="Shell_TrayWnd" || class=="Progman"
+  hwnd:=DllCall("GetWindow", "Ptr", hwnd, "UInt", GW_HWNDPREV, "Ptr")
  if hwnd=0
-  hwnd:=HWND_BROADCAST
+  return
+ if class=="Shell_TrayWnd" || class=="Progman"
+  DllCall("SetForegroundWindow", "Ptr", hwnd)
  global lastHKL:=HKL[ItemPos]
+ ;https://learn.microsoft.com/en-us/windows/win32/api/winuser/nf-winuser-postmessagea
  PostMessage WM_INPUTLANGCHANGEREQUEST, , lastHKL, , hwnd
  icon ItemPos
 }
 
+;get lang as HKL
 GetKeyboardLayout() {
  ;https://learn.microsoft.com/en-us/windows/win32/api/winuser/nf-winuser-getforegroundwindow
- hwnd:=DllCall("GetForegroundWindow")
+ hwnd:=DllCall("GetForegroundWindow", "Ptr")
+ if hwnd=0
+  return lastHKL
+ if WinGetClass(hwnd)=="ConsoleWindowClass"
+  hwnd:=DllCall("GetWindow", "Ptr", hwnd, "UInt", GW_HWNDPREV, "Ptr")
+ ;https://learn.microsoft.com/en-us/windows/win32/api/winuser/nf-winuser-getwindowthreadprocessid
+ if hwnd=0
+  tid:=0
+ else
+  tid:=DllCall("GetWindowThreadProcessId", "Ptr", hwnd, "Ptr", 0, "Ptr")
  ;https://learn.microsoft.com/en-us/windows/win32/api/winuser/nf-winuser-getkeyboardlayout
- if hwnd!=0
-  ;https://learn.microsoft.com/en-us/windows/win32/api/winuser/nf-winuser-getwindowthreadprocessid
-  hwnd:=DllCall("GetWindowThreadProcessId", "UInt", hwnd, "UInt", 0)
- return DllCall("GetKeyboardLayout", "UInt", hwnd, "UInt")
+ return DllCall("GetKeyboardLayout", "UInt", tid, "UInt")
 }
 
+;change icon in tray by ItemPos
 icon(ItemPos){
   if ItemPos=0
     A_IconTip:=""
@@ -112,12 +129,20 @@ icon(ItemPos){
  */
 }
 
+;hide ToolTip
+;change lang to US in window of UltraVNC-viewer
+;change icon in tray accordingly GetKeyboardLayout 
+;set lastHKL as GetKeyboardLayout
 TrayIcon(){
  ToolTip
- if Period<0 && lastHKL>0
+ if Period<0 && lastHKL>0{
+  if lastHKL!=HKL[1] && WinActive("ahk_class " uvnc)
+   Lang 1
   return
+ }
+ 
  curHKL:=GetKeyboardLayout()
- if WinActive(uvnc) && curHKL!=HKL[1]{ 
+ if curHKL!=HKL[1] && WinActive("ahk_class " uvnc){ 
   Lang 1
   return
  }
