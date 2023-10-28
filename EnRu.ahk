@@ -10,7 +10,7 @@ Another global keyboard layout switcher by clicking the left or right Ctrl key<b
 Нажми и отпусти правую клавишу `Ctrl` чтоб переключить раскладку клавиатуры на `ru_Ru`, но если активно окно с [UltraVNC\vncviewer](https://uvnc.com/docs/uvnc-viewer/71-viewer-gui.html) то раскладка локальной клавиатуры будет `en_US`
 git push origin --tags
 */
-;@Ahk2Exe-Let ProductVersion=v0.5.2-lw
+;@Ahk2Exe-Let ProductVersion=v0.5.4-lw
 
 #Requires AutoHotkey v2.0
 #SingleInstance
@@ -23,7 +23,8 @@ git push origin --tags
 ;@Ahk2Exe-SetDescription Changing the input language by clicking the left or right `Ctrl`
 ; @Ahk2Exe-SetLanguage 0x0419
 ; @Ahk2Exe-SetDescription Смена языка ввода по клику левого или правого `Ctrl`
-;@Ahk2Exe-PostExec "%A_ComSpec%" /c "cd /d %A_ScriptDir%&git commit -am EnRu.exr&git tag %U_ProductVersion%"
+;@Ahk2Exe-PostExec "%A_ComSpec%" /c "cd /d %A_ScriptDir%&git tag %U_ProductVersion%"
+;@Ahk2Exe-Cont  , , , , 1
 
 ;https://learn.microsoft.com/en-us/windows/win32/winmsg/wm-inputlangchangerequest
 WM_INPUTLANGCHANGEREQUEST:=0x0050
