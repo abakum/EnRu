@@ -90,7 +90,7 @@ Item(ItemName, ItemPos, MyMenu) {
   hwnd:=DllCall("GetWindow", "Ptr", hwnd, "UInt", GW_HWNDPREV, "Ptr")
  if hwnd=0
   return
- if class=="Shell_TrayWnd" || class=="Progman"
+ if class=="Shell_TrayWnd" 
   DllCall("SetForegroundWindow", "Ptr", hwnd)
  global lastHKL:=HKL[ItemPos]
  ;https://learn.microsoft.com/en-us/windows/win32/api/winuser/nf-winuser-postmessagea
