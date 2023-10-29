@@ -10,7 +10,7 @@ Another global keyboard layout switcher by clicking the left or right Ctrl key<b
 Нажми и отпусти правую клавишу `Ctrl` чтоб переключить раскладку клавиатуры на `ru_Ru`, но если активно окно с [UltraVNC\vncviewer](https://uvnc.com/docs/uvnc-viewer/71-viewer-gui.html) то раскладка локальной клавиатуры будет `en_US`
 git push origin --tags
 */
-;@Ahk2Exe-Let ProductVersion=v0.5.4-lw
+;@Ahk2Exe-Let ProductVersion=v0.6.2-lw
 
 #Requires AutoHotkey v2.0
 #SingleInstance
@@ -77,8 +77,10 @@ Item(ItemName, ItemPos, MyMenu) {
   return
  class:=WinGetClass(hwnd)
 
- if class==uvnc
+ if class==uvnc{
+  SoundBeep Frequency*ItemPos
   ItemPos:=1
+ }
  else
   ToolTip ItemName
   
@@ -122,7 +124,8 @@ icon(ItemPos){
     A_IconTip:=""
   else{
    A_IconTip:=EnRu[ItemPos]
-   SoundBeep Frequency*ItemPos
+   if !WinActive("ahk_class " uvnc)
+    SoundBeep Frequency*ItemPos
   }
  ;@Ahk2Exe-IgnoreBegin
   TraySetIcon ItemPos ".ico"
