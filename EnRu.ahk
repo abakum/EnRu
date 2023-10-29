@@ -10,7 +10,7 @@ Another global keyboard layout switcher by clicking the left or right Ctrl key<b
 Нажми и отпусти правую клавишу `Ctrl` чтоб переключить раскладку клавиатуры на `ru_Ru`, но если активно окно с [UltraVNC\vncviewer](https://uvnc.com/docs/uvnc-viewer/71-viewer-gui.html) то раскладка локальной клавиатуры будет `en_US`
 git push origin --tags
 */
-;@Ahk2Exe-Let ProductVersion=v0.5.4-lw
+;@Ahk2Exe-Let ProductVersion=v0.6.1-lw
 
 #Requires AutoHotkey v2.0
 #SingleInstance
@@ -51,17 +51,13 @@ TrayIcon
 SetTimer () => TrayIcon(), Abs(Period)*1000
 
 ~LControl up::{
- if "LControl"=A_PriorKey{
+ if "LControl"=A_PriorKey
   Lang 1
-  SoundBeep Frequency*1
- }
 }
 
 ~RControl up::{
- if "RControl"=A_PriorKey{
+ if "RControl"=A_PriorKey
   Lang 2
-  SoundBeep Frequency*2
- }
 }
 
 A_TrayMenu.Insert "1&"
@@ -84,27 +80,32 @@ Item(ItemName, ItemPos, MyMenu) {
  if class==uvnc
   ItemPos:=1
  else
-   ToolTip ItemName
-   
- if class=="#32770" || class=="Shell_TrayWnd" || class=="Progman"
+  ToolTip ItemName
+  
+ loop{
+  ;https://learn.microsoft.com/en-us/windows/win32/api/winuser/nf-winuser-postmessagea
+  PostMessage WM_INPUTLANGCHANGEREQUEST, , HKL[ItemPos], , hwnd
+  sleep 10
+  if GetKeyboardLayout()=HKL[ItemPos]{
+   global lastHKL:=HKL[ItemPos]
+   icon ItemPos
+   return
+  }
   hwnd:=DllCall("GetWindow", "Ptr", hwnd, "UInt", GW_HWNDPREV, "Ptr")
- if hwnd=0
-  return
- if class=="Shell_TrayWnd" 
-  DllCall("SetForegroundWindow", "Ptr", hwnd)
- global lastHKL:=HKL[ItemPos]
- ;https://learn.microsoft.com/en-us/windows/win32/api/winuser/nf-winuser-postmessagea
- PostMessage WM_INPUTLANGCHANGEREQUEST, , lastHKL, , hwnd
- icon ItemPos
+  if hwnd=0
+    return
+  if class=="Shell_TrayWnd"{
+   DllCall("SetForegroundWindow", "Ptr", hwnd)
+   class:=WinGetClass(hwnd)
+  }
+ }
 }
 
 ;get lang as HKL
 GetKeyboardLayout() {
  ;https://learn.microsoft.com/en-us/windows/win32/api/winuser/nf-winuser-getforegroundwindow
  hwnd:=DllCall("GetForegroundWindow", "Ptr")
- if hwnd=0
-  return lastHKL
- if WinGetClass(hwnd)=="ConsoleWindowClass"
+ if hwnd && WinGetClass(hwnd)=="ConsoleWindowClass"
   hwnd:=DllCall("GetWindow", "Ptr", hwnd, "UInt", GW_HWNDPREV, "Ptr")
  ;https://learn.microsoft.com/en-us/windows/win32/api/winuser/nf-winuser-getwindowthreadprocessid
  if hwnd=0
@@ -119,8 +120,10 @@ GetKeyboardLayout() {
 icon(ItemPos){
   if ItemPos=0
     A_IconTip:=""
-  else
+  else{
    A_IconTip:=EnRu[ItemPos]
+   SoundBeep Frequency*ItemPos
+  }
  ;@Ahk2Exe-IgnoreBegin
   TraySetIcon ItemPos ".ico"
  ;@Ahk2Exe-IgnoreEnd
