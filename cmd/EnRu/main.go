@@ -55,6 +55,8 @@ var (
 	procGetKeyboardLayout        = user32.NewProc("GetKeyboardLayout")
 
 	hook uintptr
+	exe string
+	err error
 )
 
 type KBDLLHOOKSTRUCT struct {
@@ -193,8 +195,39 @@ func switchLanguage(layoutID string) {
 	fmt.Printf("Failed to switch to %s\n", layoutID)
 }
 
+// Abs возвращает абсолютный путь, приводя букву диска к нижнему регистру (только для Windows).
+func Abs(path string) (string, error) {
+	absPath, err := filepath.Abs(path)
+	if err != nil {
+		return "", err
+	}
+
+	// Если путь начинается с буквы диска (например, "C:\"), делаем её строчной.
+	if len(absPath) > 1 && absPath[1] == ':' {
+		absPath = strings.ToLower(absPath[:1]) + absPath[1:]
+	}
+
+	return absPath, nil
+}
+
 func main() {
-	fmt.Println(Description)
+	exe, err = os.Executable()
+	if err == nil {
+		// Как в маке
+		exe, err = filepath.EvalSymlinks(exe)
+	}
+
+	if err != nil {
+		if lp, err := exec.LookPath(os.Args[0]); err == nil {
+			exe = lp
+		} else if abs, err := Abs(os.Args[0]); err == nil {
+			exe = abs
+		} else {
+			fmt.Println(err)
+			return
+		}
+	}
+	fmt.Println(Description, exe, VERSION)
 	if len(os.Args) > 1 {
 		switch os.Args[1] {
 		case "install":
@@ -203,7 +236,7 @@ func main() {
 			}
 			fallthrough
 		case "start":
-			cmd := exec.Command(os.Args[0], "background")
+			cmd := exec.Command(exe, "background")
 			background(cmd)
 
 			if err := cmd.Start(); err != nil {
@@ -249,11 +282,12 @@ func stopTask() error {
 
 	found := false
 	pid := os.Getpid()
+	exe:=filepath.Base(os.Args[0])
 	for _, p := range processes {
 		if p == nil || p.Pid() == pid {
 			continue
 		}
-		if strings.EqualFold(p.Executable(), EnRu+".exe") {
+		if strings.EqualFold(p.Executable(), exe) {
 			found = true
 			// Находим и убиваем процесс
 			proc, err := os.FindProcess(p.Pid())
@@ -333,11 +367,6 @@ func getKeyboardLayout() uintptr {
 }
 
 func setupStartupShortcut() error {
-	exePath, err := filepath.Abs(os.Args[0])
-	if err != nil {
-		return fmt.Errorf("failed to get absolute path: %v", err)
-	}
-
 	// Получаем путь к папке автозагрузки
 	startupDir, err := getStartupDir()
 	if err != nil {
@@ -349,11 +378,11 @@ func setupStartupShortcut() error {
 
 	sc := shortcut.Shortcut{
 		ShortcutPath: shortcutPath,
-		Target:       exePath,
-		// Arguments:        "", // без аргументов
+		Target:       exe,
+		Arguments:        "start",
 		Description: Description,
-		// WorkingDirectory: filepath.Dir(exePath),
-		IconLocation: exePath, // используем exe как иконку
+		WorkingDirectory: filepath.Dir(exe),
+		IconLocation: exe,
 		WindowStyle:  "1",
 		// Hotkey:           "", // без горячей клавиши
 	}
