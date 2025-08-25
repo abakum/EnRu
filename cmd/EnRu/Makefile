@@ -17,6 +17,17 @@ BUILD = build -ldflags="-s -w -extldflags=-static"
 # Path formatting for different OS
 ifeq ($(GOEXE),.exe)
     TARGET = $(subst /,\,$(BIN_PATH)/$(PROGRAM_NAME)$(GOEXE))
+    MKDIR  := mkdir
+    RMDIR  := rmdir /s /q
+    CP     := copy
+    RM     := del /q
+    FIXPATH = $(subst /,\,$1)
+else
+    MKDIR  := mkdir -p
+    RMDIR  := rm -rf
+    CP     := cp
+    RM     := rm -f
+    FIXPATH = $1
 endif
 
 install:
@@ -55,6 +66,48 @@ wsl7:
 	$(HOME)/.goenv/versions/1.20.7/bin/go $(BUILD) \
 	-o $(PROGRAM_NAME)-win7.exe
 	cp $(PROGRAM_NAME)-win7.exe "$(WSLPATH)/bin/"
+scoop7:
+# 	scoop install go@1.20.7
+# 	scoop install go
+	set GOOS=windows
+	set GOARCH=386
+	$(USERPROFILE)\scoop\apps\go\1.20.7\bin\go $(BUILD) \
+	-o $(PROGRAM_NAME)-win7.exe
+	copy $(PROGRAM_NAME)-win7.exe "$(GOPATH)\bin\"
+go7:
+# 	go install golang.org/dl/go1.20.7@latest
+# 	go1.20.7 download
+	ifeq ($(GOEXE),.exe)
+		set GOOS=windows
+		set GOARCH=386
+		go1.20.7 $(BUILD) \
+		-o $(PROGRAM_NAME)-win7.exe
+		copy $(PROGRAM_NAME)-win7.exe "$(GOPATH)\bin\"
+	else
+		set GOOS=windows \
+		set GOARCH=386 \
+		go1.20.7 $(BUILD) \
+		-o $(PROGRAM_NAME)-win7.exe
+	endif
 
 build:
 	go $(BUILD)
+
+scoop:
+	powershell -Command "Set-ExecutionPolicy RemoteSigned -Scope CurrentUser"
+    powershell -Command "iex (new-object net.webclient).downloadstring('https://get.scoop.sh')"
+go:
+	ifeq ($(GOEXE),.exe)
+		scoop install go
+	else
+		sudo apt install golang-go
+	endif
+make:
+	ifeq ($(GOEXE),.exe)
+		scoop install make
+	else
+		sudo apt install make
+	endif
+vscode:
+	scoop bucket add extras
+	scoop install vscode
