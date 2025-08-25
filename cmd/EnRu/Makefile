@@ -5,7 +5,8 @@ all: install
 # Project configuration
 PROGRAM_NAME = $(notdir $(CURDIR))
 GOEXE = $(shell go env GOEXE)
-BIN_PATH = $(shell go env GOPATH)/bin
+GOPATH = $(shell go env GOPATH)
+BIN_PATH = $(GOPATH)/bin
 TARGET = $(BIN_PATH)/$(PROGRAM_NAME)$(GOEXE)
 WINDOWS_GOPATH = $(shell cmd.exe /c "echo %GOPATH%" 2>/dev/null | tr -d '\r\n')
 WSLPATH = $(shell wslpath -u "$(WINDOWS_GOPATH)")
@@ -59,36 +60,26 @@ wsl:
 	cp $(PROGRAM_NAME).exe "$(WSLPATH)/bin/"
 
 wsl7:
-# 	goenv install 1.20.7
 	GOOS=windows \
 	GOARCH=386 \
 	CC=i686-w64-mingw32-gcc \
-	$(HOME)/.goenv/versions/1.20.7/bin/go $(BUILD) \
+	go1.20.7 $(BUILD) \
 	-o $(PROGRAM_NAME)-win7.exe
 	cp $(PROGRAM_NAME)-win7.exe "$(WSLPATH)/bin/"
-scoop7:
-# 	scoop install go@1.20.7
-# 	scoop install go
-	set GOOS=windows
-	set GOARCH=386
-	$(USERPROFILE)\scoop\apps\go\1.20.7\bin\go $(BUILD) \
-	-o $(PROGRAM_NAME)-win7.exe
-	copy $(PROGRAM_NAME)-win7.exe "$(GOPATH)\bin\"
+
+igo7:
+	go install golang.org/dl/go1.20.7@latest
+	go1.20.7 download
+
 go7:
-# 	go install golang.org/dl/go1.20.7@latest
-# 	go1.20.7 download
-	ifeq ($(GOEXE),.exe)
-		set GOOS=windows
-		set GOARCH=386
-		go1.20.7 $(BUILD) \
-		-o $(PROGRAM_NAME)-win7.exe
-		copy $(PROGRAM_NAME)-win7.exe "$(GOPATH)\bin\"
-	else
-		set GOOS=windows \
-		set GOARCH=386 \
-		go1.20.7 $(BUILD) \
-		-o $(PROGRAM_NAME)-win7.exe
-	endif
+ifeq ($(GOEXE),.exe)
+	set GOOS=windows&& \
+	set GOARCH=386&& \
+	go1.20.7 $(BUILD) -o $(PROGRAM_NAME)-win7.exe&& \
+	copy $(PROGRAM_NAME)-win7.exe "$(GOPATH)\bin\"
+else
+	GOOS=windows GOARCH=386 go1.20.7 $(BUILD) -o $(PROGRAM_NAME)-win7.exe
+endif
 
 build:
 	go $(BUILD)
@@ -96,18 +87,21 @@ build:
 scoop:
 	powershell -Command "Set-ExecutionPolicy RemoteSigned -Scope CurrentUser"
     powershell -Command "iex (new-object net.webclient).downloadstring('https://get.scoop.sh')"
-go:
-	ifeq ($(GOEXE),.exe)
-		scoop install go
-	else
-		sudo apt install golang-go
-	endif
+
+igo:
+ifeq ($(GOEXE),.exe)
+	scoop install go
+else
+	sudo apt install golang-go
+endif
+
 make:
-	ifeq ($(GOEXE),.exe)
-		scoop install make
-	else
-		sudo apt install make
-	endif
+ifeq ($(GOEXE),.exe)
+	scoop install make
+else
+	sudo apt install make
+endif
+
 vscode:
 	scoop bucket add extras
 	scoop install vscode
