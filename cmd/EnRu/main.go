@@ -6,6 +6,8 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
+	"runtime/debug"
 	"strings"
 	"syscall"
 	"time"
@@ -55,8 +57,8 @@ var (
 	procGetKeyboardLayout        = user32.NewProc("GetKeyboardLayout")
 
 	hook uintptr
-	exe string
-	err error
+	exe  string
+	err  error
 )
 
 type KBDLLHOOKSTRUCT struct {
@@ -90,7 +92,7 @@ func setHook() error {
 	)
 
 	if r == 0 {
-		return fmt.Errorf("SetWindowsHookEx failed: %v", err)
+		return fmt.Errorf("SetWindowsHookEx WH_KEYBOARD_LL: %v", err)
 	}
 
 	hook = r
@@ -149,13 +151,13 @@ func switchLanguage(layoutID string) {
 	)
 
 	if hkl == 0 {
-		fmt.Printf("Failed to load %s\n", layoutID)
+		fmt.Printf("Не удалось загрузить: %s\n", layoutID)
 		return
 	}
 
 	hwnd, _, _ := procGetForegroundWindow.Call()
 	if hwnd == 0 {
-		fmt.Printf("Failed to get foreground window")
+		fmt.Printf("Не удалось получить активное окно")
 		return
 	}
 
@@ -164,6 +166,7 @@ func switchLanguage(layoutID string) {
 	// Итерируем через цепочку окон
 	for hwnd != 0 {
 		if getKeyboardLayout() == hkl {
+			// Уже на
 			return
 		}
 		// Отправляем сообщение
@@ -178,7 +181,7 @@ func switchLanguage(layoutID string) {
 
 		// Проверяем успешность
 		if getKeyboardLayout() == hkl {
-			fmt.Printf("Successfully switched to %s\n", layoutID)
+			fmt.Printf("Переключились на: %s\n", layoutID)
 			return
 		}
 
@@ -192,7 +195,7 @@ func switchLanguage(layoutID string) {
 		}
 	}
 
-	fmt.Printf("Failed to switch to %s\n", layoutID)
+	fmt.Printf("Не удалось переключиться на: %s\n", layoutID)
 }
 
 // Abs возвращает абсолютный путь, приводя букву диска к нижнему регистру (только для Windows).
@@ -227,86 +230,99 @@ func main() {
 			return
 		}
 	}
-	fmt.Println(Description, exe, VERSION)
+
+	s := ""
+	if info, ok := debug.ReadBuildInfo(); ok {
+		s = "Собрано " + info.GoVersion
+	}
+	majorVersion, minorVersion, buildNumber := windows.RtlGetNtVersionNumbers()
+	fmt.Println(Description, exe, VERSION, s, fmt.Sprintf("%d.%d.%d on %s", majorVersion, minorVersion, buildNumber, runtime.GOARCH))
 	if len(os.Args) > 1 {
 		switch os.Args[1] {
 		case "install":
 			if err := setupStartupShortcut(); err != nil {
-				fmt.Printf("Install failed: %v\n", err)
+				fmt.Printf("Не удалось установить ярлык в папку автозагрузки: %v\n", err)
 			}
 			fallthrough
 		case "start":
-			cmd := exec.Command(exe, "background")
-			background(cmd)
-
-			if err := cmd.Start(); err != nil {
-				fmt.Printf("Failed to start: %v\n", err)
-				return
-			}
-
-			// Можно сразу выйти, дочерний процесс продолжит работу
-			fmt.Println("Started in background")
-			fmt.Println("Left Ctrl -> English")
-			fmt.Println("Right Ctrl -> Russian")
-			return
 		case "uninstall":
 			if err := removeStartupShortcut(); err != nil {
-				fmt.Printf("Uninstall failed: %v\n", err)
+				fmt.Printf("Не удалось убрать ярлык из папки автозагрузки: %v\n", err)
 			}
 			fallthrough
 		case "stop":
 			if err := stopTask(); err != nil {
-				fmt.Printf("Stop failed: %v\n", err)
+				fmt.Printf("Не удалось остановить: %v\n", err)
 			}
 			return
-		case "background":
+		case "console":
 			stopTask()
 			if err := setHook(); err != nil {
-				fmt.Printf("setHook failed: %v\n", err)
+				fmt.Println(err)
 				return
 			}
 			defer unhook()
-
+			fmt.Println("Запущена в фоновом режиме")
+			fmt.Println("Левый Ctrl -> Английский")
+			fmt.Println("Правый Ctrl -> Русский")
+			fmt.Println("Для остановки нажмите Ctrl+C")
 			messageLoop()
 		}
 	}
-	fmt.Printf("Use command: install, start, uninstall, stop\n")
+	fmt.Println("Используй команды: install, start, uninstall, stop, console")
+	fmt.Println("По команде start остановится и запустится в фоновом режиме")
+	fmt.Println("По команде install установится в автозагрузку shell:startup остановится и запустится в фоновом режиме")
+	fmt.Println("По команде uninstall уберётся из автозагрузки shell:startup и остановится")
+	fmt.Println("Без команды или с неправильной командой остановится и запустится в фоновом режиме")
+	fmt.Println("По команде console запустится в консоле для отладки")
+
+	cmd := exec.Command(exe, "console")
+	background(cmd)
+
+	if err := cmd.Start(); err != nil {
+		fmt.Printf("Ошибка запуска: %v\n", err)
+		return
+	}
+
+	fmt.Println("Запущена в фоновом режиме")
+	fmt.Println("Левый Ctrl -> Английский")
+	fmt.Println("Правый Ctrl -> Русский")
 }
 
 func stopTask() error {
 	// Ищем процесс по имени
 	processes, err := ps.Processes()
 	if err != nil {
-		return fmt.Errorf("failed to get processes: %v", err)
+		return fmt.Errorf("не удалось получить процессы: %v", err)
 	}
 
 	found := false
 	pid := os.Getpid()
-	exe:=filepath.Base(os.Args[0])
+	exe := filepath.Base(os.Args[0])
 	for _, p := range processes {
 		if p == nil || p.Pid() == pid {
 			continue
 		}
 		if strings.EqualFold(p.Executable(), exe) {
 			found = true
-			// Находим и убиваем процесс
+			// Находим фоновый процесс
 			proc, err := os.FindProcess(p.Pid())
 			if err != nil {
-				return fmt.Errorf("failed to find process %d: %v", p.Pid(), err)
+				return fmt.Errorf("не удалось найти фоновый процесс %d: %v", p.Pid(), err)
 			}
 
 			err = proc.Kill()
 			if err != nil {
-				return fmt.Errorf("failed to kill process %d: %v", p.Pid(), err)
+				return fmt.Errorf("не удалось остановить фоновый процесс %d: %v", p.Pid(), err)
 			}
 
-			fmt.Printf("Process %d stopped successfully\n", p.Pid())
+			fmt.Printf("Фоновый процесс %d остановлен\n", p.Pid())
 			time.Sleep(100 * time.Millisecond)
 		}
 	}
 
 	if !found {
-		fmt.Println("Process was not running")
+		fmt.Println("Фоновый процесс не запущен")
 	}
 
 	return nil
@@ -373,26 +389,24 @@ func setupStartupShortcut() error {
 		return err
 	}
 
-	// Создаем ярлык с помощью пакета shortcut
+	// Создаем ярлык
 	shortcutPath := filepath.Join(startupDir, "EnRu.lnk")
 
 	sc := shortcut.Shortcut{
 		ShortcutPath: shortcutPath,
 		Target:       exe,
-		Arguments:        "start",
-		Description: Description,
-		WorkingDirectory: filepath.Dir(exe),
+		Arguments:    "start",
+		Description:  Description,
 		IconLocation: exe,
-		WindowStyle:  "1",
-		// Hotkey:           "", // без горячей клавиши
+		WindowStyle:  "7",
 	}
 
 	err = shortcut.Create(sc)
 	if err != nil {
-		return fmt.Errorf("failed to create shortcut: %v", err)
+		return fmt.Errorf("не удалось создать ярлык: %v", err)
 	}
 
-	fmt.Printf("Startup shortcut created successfully: %s\n", shortcutPath)
+	fmt.Printf("Ярлык добавлен в папку автозапуска: %s\n", shortcutPath)
 	return nil
 }
 
@@ -400,7 +414,7 @@ func getStartupDir() (string, error) {
 	// Для текущего пользователя
 	dir := os.Getenv("APPDATA")
 	if dir == "" {
-		return "", fmt.Errorf("APPDATA environment variable not set")
+		return "", fmt.Errorf("не найдена переменная среды APPDATA")
 	}
 	return filepath.Join(dir, "Microsoft", "Windows", "Start Menu", "Programs", "Startup"), nil
 }
@@ -415,27 +429,9 @@ func removeStartupShortcut() error {
 	shortcutPath := filepath.Join(startupDir, "EnRu.lnk")
 	err = os.Remove(shortcutPath)
 	if err != nil && !os.IsNotExist(err) {
-		return fmt.Errorf("failed to remove shortcut: %v", err)
+		return fmt.Errorf("не удалось убрать ярлык из автозагрузки: %v", err)
 	}
 
-	fmt.Printf("Startup shortcut removed: %s\n", shortcutPath)
+	fmt.Printf("Ярлык убран из: %s\n", shortcutPath)
 	return nil
-}
-
-// Проверка существования ярлыка
-func startupShortcutExists() (bool, error) {
-	startupDir, err := getStartupDir()
-	if err != nil {
-		return false, err
-	}
-
-	shortcutPath := filepath.Join(startupDir, "EnRu.lnk")
-	_, err = os.Stat(shortcutPath)
-	if os.IsNotExist(err) {
-		return false, nil
-	}
-	if err != nil {
-		return false, err
-	}
-	return true, nil
 }

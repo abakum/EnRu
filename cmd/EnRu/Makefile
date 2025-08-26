@@ -7,9 +7,10 @@ PROGRAM_NAME = $(notdir $(CURDIR))
 GOEXE = $(shell go env GOEXE)
 GOPATH = $(shell go env GOPATH)
 BIN_PATH = $(GOPATH)/bin
-TARGET = $(BIN_PATH)/$(PROGRAM_NAME)$(GOEXE)
+TARGET = "$(BIN_PATH)/$(PROGRAM_NAME)$(GOEXE)"
 WINDOWS_GOPATH = $(shell cmd.exe /c "echo %GOPATH%" 2>/dev/null | tr -d '\r\n')
 WSLPATH = $(shell wslpath -u "$(WINDOWS_GOPATH)")
+WIN7 := go1.21.4
 
 # Installation settings
 INSTALL = install -ldflags="-s -w"
@@ -17,18 +18,18 @@ BUILD = build -ldflags="-s -w -extldflags=-static"
 
 # Path formatting for different OS
 ifeq ($(GOEXE),.exe)
-    TARGET = $(subst /,\,$(BIN_PATH)/$(PROGRAM_NAME)$(GOEXE))
+    TARGET = "$(subst /,\,$(BIN_PATH)/$(PROGRAM_NAME)$(GOEXE))"
     MKDIR  := mkdir
     RMDIR  := rmdir /s /q
     CP     := copy
     RM     := del /q
-    FIXPATH = $(subst /,\,$1)
+    PATH = "$(subst /,\,$1)"
 else
     MKDIR  := mkdir -p
     RMDIR  := rm -rf
     CP     := cp
     RM     := rm -f
-    FIXPATH = $1
+    PATH = "$1"
 endif
 
 install:
@@ -63,7 +64,7 @@ wsl7:
 	GOOS=windows \
 	GOARCH=386 \
 	CC=i686-w64-mingw32-gcc \
-	go1.20.7 $(BUILD) \
+	$(WIN7) $(BUILD) \
 	-o $(PROGRAM_NAME)-win7.exe
 	cp $(PROGRAM_NAME)-win7.exe "$(WSLPATH)/bin/"
 
@@ -71,18 +72,23 @@ igo7:
 	go install golang.org/dl/go1.20.7@latest
 	go1.20.7 download
 
+igo4:
+	go install golang.org/dl/go1.21.4@latest
+	go1.21.4 download
+
 go7:
 ifeq ($(GOEXE),.exe)
 	set GOOS=windows&& \
 	set GOARCH=386&& \
-	go1.20.7 $(BUILD) -o $(PROGRAM_NAME)-win7.exe&& \
+	$(WIN7) $(BUILD) -o $(PROGRAM_NAME)-win7.exe&& \
 	copy $(PROGRAM_NAME)-win7.exe "$(GOPATH)\bin\"
 else
 	GOOS=windows GOARCH=386 go1.20.7 $(BUILD) -o $(PROGRAM_NAME)-win7.exe
 endif
 
 build:
-	go $(BUILD)
+	go $(BUILD)&& \
+	$(CP) $(call PATH,$(PROGRAM_NAME)$(GOEXE)) $(TARGET)
 
 scoop:
 	powershell -Command "Set-ExecutionPolicy RemoteSigned -Scope CurrentUser"
