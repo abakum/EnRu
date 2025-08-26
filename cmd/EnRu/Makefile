@@ -1,6 +1,6 @@
 all: i
 
-.PHONY: i wsl wsl7 clean ls b igo7 go7 iscoop igo imake icode igit
+.PHONY: i wsl wslc wsl7 wslc7 clean ls b igo7 win win7 iscoop igo imake icode igit
 
 # Project configuration
 PROGRAM_NAME = $(notdir $(CURDIR))
