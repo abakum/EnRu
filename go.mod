@@ -1,6 +1,5 @@
 module github.com/abakum/EnRu
 
-//go 1.22
 go 1.21.4
 
 require (

@@ -36,44 +36,60 @@ TARGET := $(call NORM,$(BIN_PATH)/$(PROGRAM_NAME)$(GOEXE))
 i:
 	go $(INSTALL)
 
+b:
+	go $(BUILD)&& \
+	$(CP) $(call NORM,$(PROGRAM_NAME)$(GOEXE)) $(TARGET)
+
 clean:
-	@$(RM) $(TARGET)
+	$(RM) $(TARGET)
 
 ls:
-	@$(LS) $(TARGET)
+	$(LS) $(TARGET)
 
 wsl:
 	GOOS=windows \
-	GOARCH=amd64 \
+	CGO_ENABLED=0 \
+	go $(BUILD)
+	cp "$(PROGRAM_NAME).exe" "$(WSLPATH)/bin/"
+
+wslc:
+	GOOS=windows \
+	CGO_ENABLED=1 \
 	CC=x86_64-w64-mingw32-gcc \
 	go $(BUILD)
-	cp $(PROGRAM_NAME).exe "$(WSLPATH)/bin/"
+	cp "$(PROGRAM_NAME).exe" "$(WSLPATH)/bin/"
 
 wsl7:
 	GOOS=windows \
 	GOARCH=386 \
+	CGO_ENABLED=0 \
+	$(WIN7) $(BUILD) \
+	-o "$(PROGRAM_NAME)-win7.exe"
+	cp "$(PROGRAM_NAME)-win7.exe" "$(WSLPATH)/bin/"
+
+wslc7:
+	GOOS=windows \
+	GOARCH=386 \
+	CGO_ENABLED=1 \
 	CC=i686-w64-mingw32-gcc \
 	$(WIN7) $(BUILD) \
-	-o $(PROGRAM_NAME)-win7.exe
-	cp $(PROGRAM_NAME)-win7.exe "$(WSLPATH)/bin/"
+	-o "$(PROGRAM_NAME)-win7.exe"
+	cp "$(PROGRAM_NAME)-win7.exe" "$(WSLPATH)/bin/"
 
-igo7:
-	go install golang.org/dl$(WIN7)@latest&& \
-	$(WIN7) download
-
-go7:
+win7:
 ifeq ($(GOEXE),.exe)
-	set GOOS=windows&& \
 	set GOARCH=386&& \
-	$(WIN7) $(BUILD) -o $(PROGRAM_NAME)-win7.exe&& \
-	copy "$(PROGRAM_NAME)-win7.exe" "$(GOPATH)\bin\"
+	$(WIN7) $(BUILD) -o "$(PROGRAM_NAME)-win7.exe"
 else
 	GOOS=windows GOARCH=386 $(WIN7) $(BUILD) -o "$(PROGRAM_NAME)-win7.exe"
 endif
 
-b:
-	go $(BUILD)&& \
-	$(CP) $(call NORM,$(PROGRAM_NAME)$(GOEXE)) $(TARGET)
+win:
+	GOOS=windows go $(BUILD)
+
+igo7:
+	go install golang.org/dl/$(WIN7)@latest&& \
+	$(WIN7) download
 
 iscoop:
 	powershell -Command "Set-ExecutionPolicy RemoteSigned -Scope CurrentUser"&& \
@@ -97,7 +113,7 @@ icode:
 	scoop bucket add extras&& \
 	scoop install vscode
 
-git:
+igit:
 ifeq ($(GOEXE),.exe)
 	scoop install git
 else
