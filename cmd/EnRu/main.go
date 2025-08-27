@@ -298,12 +298,11 @@ func stopTask() error {
 
 	found := false
 	pid := os.Getpid()
-	exe := filepath.Base(os.Args[0])
 	for _, p := range processes {
 		if p == nil || p.Pid() == pid {
 			continue
 		}
-		if strings.EqualFold(p.Executable(), exe) {
+		if strings.EqualFold(p.Executable(), filepath.Base(exe)) {
 			found = true
 			// Находим фоновый процесс
 			proc, err := os.FindProcess(p.Pid())
