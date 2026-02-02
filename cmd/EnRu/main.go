@@ -30,13 +30,22 @@ const (
 	WH_KEYBOARD_LL            = 13
 	WM_KEYUP                  = 0x0101
 	WM_INPUTLANGCHANGEREQUEST = 0x0050
+	WM_INPUTLANGCHANGE        = 0x0051
 	VK_LCONTROL               = 0xA2
 	VK_RCONTROL               = 0xA3
-	GW_HWNDPREV               = 3
-	EnRu                      = "EnRu"
-	Description               = "EnRu Keyboard Layout Switcher"
-	En                        = "00000409"
-	Ru                        = "00000419"
+
+	KEYEVENTF_KEYUP = 0x0002
+
+	GW_HWNDPREV         = 3
+	GW_HWNDPARENT       = 4
+	EnRu                = "EnRu"
+	Description         = "EnRu Keyboard Layout Switcher"
+	En                  = "00000409"
+	Ru                  = "00000419"
+	debounceMs    int64 = 150  // в миллисекундах
+	FreqRu              = 523  // C5 (До)
+	FreqEn              = 1046 // C6 (До на октаву выше)
+	BeepDuration        = 100 * time.Millisecond
 )
 
 var (
@@ -55,10 +64,16 @@ var (
 	procGetClassName             = user32.NewProc("GetClassNameW")
 	procGetWindowThreadProcessId = user32.NewProc("GetWindowThreadProcessId")
 	procGetKeyboardLayout        = user32.NewProc("GetKeyboardLayout")
+	procFindWindow               = user32.NewProc("FindWindowW")
 
-	hook uintptr
-	exe  string
-	err  error
+	kernel32 = syscall.NewLazyDLL("kernel32.dll")
+	procBeep = kernel32.NewProc("Beep")
+
+	hook              uintptr
+	exe               string
+	err               error
+	lastProcessedKey  uint32
+	lastProcessedTime int64
 )
 
 type KBDLLHOOKSTRUCT struct {
@@ -80,6 +95,10 @@ type MSG struct {
 
 type POINT struct {
 	X, Y int32
+}
+
+func playBeep(freq uint) {
+	procBeep.Call(uintptr(freq), uintptr(BeepDuration.Milliseconds()))
 }
 
 func setHook() error {
@@ -126,50 +145,76 @@ func messageLoop() {
 }
 
 func keyboardHook(nCode int, wParam uintptr, lParam uintptr) uintptr {
+	result, _, _ := procCallNextHookEx.Call(0, uintptr(nCode), wParam, lParam)
+
 	if nCode >= 0 && wParam == WM_KEYUP {
 		kb := (*KBDLLHOOKSTRUCT)(unsafe.Pointer(lParam))
 
-		switch kb.VkCode {
-		case VK_LCONTROL:
-			switchLanguage(En)
-		case VK_RCONTROL:
-			switchLanguage(Ru)
+		if kb.VkCode == VK_LCONTROL || kb.VkCode == VK_RCONTROL {
+			now := time.Now().UnixNano() / 1e6 // ms
+			last := lastProcessedTime
+
+			if kb.VkCode == lastProcessedKey && (now-last) < debounceMs {
+				return result // Уже обрабатывали недавно
+			}
+
+			// Обновляем время
+			lastProcessedKey = kb.VkCode
+			lastProcessedTime = now
+
+			// Запускаем обработку
+			go func(vkCode uint32) {
+				switch vkCode {
+				case VK_LCONTROL:
+					playBeep(FreqEn)
+					switchLanguage(En)
+				case VK_RCONTROL:
+					playBeep(FreqRu)
+					switchLanguage(Ru)
+				}
+			}(kb.VkCode)
 		}
 	}
-
-	// Всегда передаем событие дальше
-	result, _, _ := procCallNextHookEx.Call(0, uintptr(nCode), wParam, lParam)
 	return result
 }
 
 func switchLanguage(layoutID string) {
 	// Загружаем раскладку
 	layoutPtr, _ := windows.UTF16PtrFromString(layoutID)
-	hkl, _, _ := procLoadKeyboardLayout.Call(
+	hkl, _, err := procLoadKeyboardLayout.Call(
 		uintptr(unsafe.Pointer(layoutPtr)),
 		0,
 	)
 
 	if hkl == 0 {
-		fmt.Printf("Не удалось загрузить: %s\n", layoutID)
+		fmt.Printf("LoadKeyboardLayout %s: %v\n", layoutID, err)
 		return
 	}
 
-	hwnd, _, _ := procGetForegroundWindow.Call()
+	hwnd, _, err := procGetForegroundWindow.Call()
 	if hwnd == 0 {
-		fmt.Printf("Не удалось получить активное окно")
+		fmt.Printf("GetForegroundWindow: %v\n", err)
 		return
 	}
 
 	class := getWindowClass(hwnd)
-
+	once := true
 	// Итерируем через цепочку окон
 	for hwnd != 0 {
-		if getKeyboardLayout() == hkl {
-			// Уже на
-			return
+		if class == "OpusApp" && once { // Word великий и ужасный
+			once = false
+			fmt.Printf("Не переключаем %s на: %s\n", class, layoutID)
+			if progman := findProgman(); progman != 0 {
+				procSetForegroundWindow.Call(progman)
+				defer procSetForegroundWindow.Call(hwnd)
+				hwnd = progman
+				class = "Progman"
+				continue
+			} else {
+				return
+			}
 		}
-		// Отправляем сообщение
+
 		procPostMessage.Call(
 			hwnd,
 			WM_INPUTLANGCHANGEREQUEST,
@@ -180,8 +225,8 @@ func switchLanguage(layoutID string) {
 		time.Sleep(7 * time.Millisecond)
 
 		// Проверяем успешность
-		if getKeyboardLayout() == hkl {
-			fmt.Printf("Переключились на: %s\n", layoutID)
+		if getKeyboardLayout(hwnd) == hkl {
+			fmt.Printf("Переключили %s на: %s\n", class, layoutID)
 			return
 		}
 
@@ -189,7 +234,7 @@ func switchLanguage(layoutID string) {
 		hwnd, _, _ = procGetWindow.Call(hwnd, GW_HWNDPREV)
 
 		// Для панели задач активируем следующее окно
-		if class == "Shell_TrayWnd" {
+		if class == "Shell_TrayWnd" && hwnd != 0 {
 			procSetForegroundWindow.Call(hwnd)
 			class = getWindowClass(hwnd)
 		}
@@ -356,9 +401,8 @@ func getWindowClass(hwnd uintptr) string {
 	return ""
 }
 
-func getKeyboardLayout() uintptr {
-	// Получаем активное окно
-	hwnd, _, _ := procGetForegroundWindow.Call()
+// Функция для получения раскладки конкретного окна
+func getKeyboardLayout(hwnd uintptr) uintptr {
 	if hwnd == 0 {
 		return 0
 	}
@@ -369,12 +413,9 @@ func getKeyboardLayout() uintptr {
 		hwnd, _, _ = procGetWindow.Call(hwnd, GW_HWNDPREV)
 	}
 
-	// Получаем thread и layout
-	var tid uintptr
-	if hwnd == 0 {
-		tid = 0
-	} else {
-		tid, _, _ = procGetWindowThreadProcessId.Call(hwnd, 0)
+	tid, _, _ := procGetWindowThreadProcessId.Call(hwnd, 0)
+	if tid == 0 {
+		return 0
 	}
 
 	layout, _, _ := procGetKeyboardLayout.Call(tid)
@@ -433,4 +474,13 @@ func removeStartupShortcut() error {
 
 	fmt.Printf("Ярлык убран из: %s\n", shortcutPath)
 	return nil
+}
+
+func findProgman() uintptr {
+	className, _ := windows.UTF16PtrFromString("Progman")
+	hwnd, _, _ := procFindWindow.Call(
+		uintptr(unsafe.Pointer(className)),
+		0,
+	)
+	return hwnd
 }
