@@ -40,9 +40,6 @@ const (
 	GrabModeSync  = 1
 	GrabModeAsync = 2
 
-	// XKB
-	XkbUseCoreKbd = 0x0100
-
 	// X11 Keycodes для Ctrl (X11 keycode = physical scan code + 8)
 	KeyCodeLCtrl = 0x25 + 8 // 37
 	KeyCodeRCtrl = 0x69 + 8 // 109
@@ -177,19 +174,24 @@ func generateWAVFile(freq uint, durationMs int) (string, error) {
 	return tmpFile.Name(), nil
 }
 
-func switchLayout(X *xgb.Conn, group uint8) error {
-	if err := xkb.LockGroup(X, XkbUseCoreKbd, group); err != nil {
-		return fmt.Errorf("xkb.LockGroup: %v", err)
+func switchLayout(group uint8) error {
+	var layout string
+	switch group {
+	case 0:
+		layout = "us"
+	case 1:
+		layout = "ru"
+	default:
+		return fmt.Errorf("неизвестная группа раскладки: %d", group)
+	}
+	cmd := exec.Command("setxkbmap", "-layout", layout)
+	if err := cmd.Run(); err != nil {
+		return fmt.Errorf("setxkbmap %s: %v", layout, err)
 	}
 	return nil
 }
 
 func keyEventLoop(X *xgb.Conn) error {
-	// Инициализация XKB
-	if err := xkb.Init(X); err != nil {
-		return fmt.Errorf("xkb.Init: %v", err)
-	}
-
 	root := X.DefaultScreen().Root
 
 	// Грабим Ctrl клавиши
@@ -236,14 +238,14 @@ func keyEventLoop(X *xgb.Conn) error {
 			switch keyCode {
 			case KeyCodeLCtrl:
 				playBeep(FreqEn)
-				if err := switchLayout(X, 0); err != nil {
+				if err := switchLayout(0); err != nil {
 					fmt.Printf("Переключение на English: %v\n", err)
 				} else {
 					fmt.Println("Переключено на English")
 				}
 			case KeyCodeRCtrl:
 				playBeep(FreqRu)
-				if err := switchLayout(X, 1); err != nil {
+				if err := switchLayout(1); err != nil {
 					fmt.Printf("Переключение на Русский: %v\n", err)
 				} else {
 					fmt.Println("Переключено на Русский")

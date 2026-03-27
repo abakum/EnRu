@@ -1,3 +1,5 @@
+github.com/BurntSushi/xgb v0.0.0-20210121224620-deaf085860bc h1:7D+Bh06CRPCJO3gr2F7h1sriovOZ8BMhca2Rg85c2nk=
+github.com/BurntSushi/xgb v0.0.0-20210121224620-deaf085860bc/go.mod h1:IVnqGOEym/WlBOVXweHU+Q+/VP0lqqI8lqeDx9IjBqo=
 github.com/abakum/version v0.1.5-lw.0.20250827090935-a2a1280b5225 h1:FGf+dB4jjY+ojkzR0It6PX97LZnyxYmkd/2lpHV1fho=
 github.com/abakum/version v0.1.5-lw.0.20250827090935-a2a1280b5225/go.mod h1:v/GcSOIBPOVwI7Mk7sKiMGih9sQH1tWdfpzF6VPW/ws=
 github.com/go-ole/go-ole v1.2.6 h1:/Fpf6oFPoeFik9ty7siob0G6Ke8QvQEuVcuChpwXzpY=
