@@ -14,7 +14,7 @@ windows:
 	GOOS=windows CGO_ENABLED=0 go $(BUILD) -o "$(PROGRAM_NAME).exe" ./cmd/windows/EnRu/
 
 linux:
-	GOOS=linux CGO_ENABLED=0 go $(BUILD) -o "$(PROGRAM_NAME)" ./cmd/linux/EnRu/
+	GOOS=linux CGO_ENABLED=1 go $(BUILD) -o "$(PROGRAM_NAME)" ./cmd/linux/EnRu/
 
 install: windows-install linux-install
 
@@ -22,7 +22,7 @@ windows-install:
 	GOOS=windows CGO_ENABLED=0 go $(INSTALL) ./cmd/windows/EnRu/
 
 linux-install:
-	GOOS=linux CGO_ENABLED=0 go $(INSTALL) ./cmd/linux/EnRu/
+	GOOS=linux CGO_ENABLED=1 go $(INSTALL) ./cmd/linux/EnRu/
 
 clean:
 	rm -f "$(PROGRAM_NAME)" "$(PROGRAM_NAME).exe"

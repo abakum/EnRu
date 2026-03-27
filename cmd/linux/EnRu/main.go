@@ -6,7 +6,7 @@ import (
 	_ "embed"
 	"encoding/binary"
 	"fmt"
-	"log"
+ь	"log"
 	"os"
 	"os/exec"
 	"os/signal"
