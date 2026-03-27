@@ -199,19 +199,14 @@ func keyEventLoop(X *xgb.Conn) error {
 
 	// Грабим Ctrl клавиши
 	// GrabModeSync позволяет нам увидеть событие и затем решить, пропустить его дальше
-	err := xproto.GrabKey(X, true, root, 
-		xproto.ModMaskAny, xproto.Keycode(KeyCodeLCtrl), 
-		xproto.GrabModeSync, xproto.GrabModeAsync).Check()
-	if err != nil {
-		return fmt.Errorf("GrabKey LCtrl: %v", err)
-	}
+	// Note: GrabKey doesn't return an error directly in XGB - errors come through the event loop
+	xproto.GrabKey(X, true, root,
+		xproto.ModMaskAny, xproto.Keycode(KeyCodeLCtrl),
+		xproto.GrabModeSync, xproto.GrabModeAsync)
 
-	err = xproto.GrabKey(X, true, root,
+	xproto.GrabKey(X, true, root,
 		xproto.ModMaskAny, xproto.Keycode(KeyCodeRCtrl),
-		xproto.GrabModeSync, xproto.GrabModeAsync).Check()
-	if err != nil {
-		return fmt.Errorf("GrabKey RCtrl: %v", err)
-	}
+		xproto.GrabModeSync, xproto.GrabModeAsync)
 
 	X.Sync()
 
