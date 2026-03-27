@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"github.com/BurntSushi/xgb"
+	"github.com/BurntSushi/xgb/xproto"
 	version "github.com/abakum/version/lib"
 	"github.com/mitchellh/go-ps"
 )
@@ -192,23 +193,27 @@ func switchLayout(group uint8) error {
 }
 
 func keyEventLoop(X *xgb.Conn) error {
-	root := X.DefaultScreen().Root
+	setup := xproto.Setup(X)
+	screen := setup.DefaultScreen(X)
+	root := screen.Root
 
 	// Грабим Ctrl клавиши
 	// GrabModeSync позволяет нам увидеть событие и затем решить, пропустить его дальше
-	err := X.GrabKey(true, root, KeyPressMask|KeyReleaseMask,
-		KeyCodeLCtrl, GrabModeSync, GrabModeAsync)
+	err := xproto.GrabKey(X, true, root, 
+		xproto.ModMaskAny, xproto.Keycode(KeyCodeLCtrl), 
+		xproto.GrabModeSync, xproto.GrabModeAsync).Check()
 	if err != nil {
 		return fmt.Errorf("GrabKey LCtrl: %v", err)
 	}
 
-	err = X.GrabKey(true, root, KeyPressMask|KeyReleaseMask,
-		KeyCodeRCtrl, GrabModeSync, GrabModeAsync)
+	err = xproto.GrabKey(X, true, root,
+		xproto.ModMaskAny, xproto.Keycode(KeyCodeRCtrl),
+		xproto.GrabModeSync, xproto.GrabModeAsync).Check()
 	if err != nil {
 		return fmt.Errorf("GrabKey RCtrl: %v", err)
 	}
 
-	X.Flush()
+	X.Sync()
 
 	for {
 		ev, err := X.WaitForEvent()
@@ -220,10 +225,10 @@ func keyEventLoop(X *xgb.Conn) error {
 		}
 
 		switch keyEv := ev.(type) {
-		case xgb.KeyReleaseEvent:
+		case xproto.KeyReleaseEvent:
 			// Разрешаем событию пройти дальше к приложению
-			X.AllowEvents(xgb.ReplayKeyboard, xgb.Timestamp(keyEv.Time))
-			X.Flush()
+			xproto.AllowEvents(X, xproto.AllowReplayPointer, xproto.Timestamp(keyEv.Time))
+			X.Sync()
 
 			now := time.Now().UnixNano() / 1e6 // ms
 			keyCode := byte(keyEv.Detail)
@@ -252,20 +257,20 @@ func keyEventLoop(X *xgb.Conn) error {
 				}
 			}
 
-		case xgb.KeyPressEvent:
+		case xproto.KeyPressEvent:
 			// Просто пропускаем KeyPress
-			X.AllowEvents(xgb.ReplayKeyboard, xgb.Timestamp(keyEv.Time))
-			X.Flush()
+			xproto.AllowEvents(X, xproto.AllowReplayPointer, xproto.Timestamp(keyEv.Time))
+			X.Sync()
 		}
 	}
 }
 
-func cleanup(X *xgb.Conn, root xgb.Window) {
+func cleanup(X *xgb.Conn, root xproto.Window) {
 	if X == nil {
 		return
 	}
-	_ = X.UngrabKey(KeyCodeLCtrl, root, KeyPressMask|KeyReleaseMask)
-	_ = X.UngrabKey(KeyCodeRCtrl, root, KeyPressMask|KeyReleaseMask)
+	_ = xproto.UngrabKey(X, xproto.Keycode(KeyCodeLCtrl), root, xproto.ModMaskAny)
+	_ = xproto.UngrabKey(X, xproto.Keycode(KeyCodeRCtrl), root, xproto.ModMaskAny)
 	X.Close()
 }
 
@@ -435,14 +440,16 @@ func main() {
 }
 
 func runConsole() {
-	X, err := xgb.Connect(os.Getenv("DISPLAY"))
+	X, err := xgb.NewConn()
 	if err != nil {
 		fmt.Printf("Не удалось подключиться к X11: %v\n", err)
 		os.Exit(1)
 	}
 	defer X.Close()
 
-	root := X.DefaultScreen().Root
+	setup := xproto.Setup(X)
+	screen := setup.DefaultScreen(X)
+	root := screen.Root
 
 	// Обработка сигналов для корректного завершения
 	sigChan := make(chan os.Signal, 1)
