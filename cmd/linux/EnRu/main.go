@@ -6,6 +6,7 @@ import (
 	_ "embed"
 	"encoding/binary"
 	"fmt"
+	"log"
 	"os"
 	"os/exec"
 	"os/signal"
@@ -16,8 +17,8 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/BurntSushi/xgb"
-	"github.com/BurntSushi/xgb/xproto"
+	"github.com/godbus/dbus/v5"
+	"github.com/grafov/evdev"
 	version "github.com/abakum/version/lib"
 	"github.com/mitchellh/go-ps"
 )
@@ -31,48 +32,17 @@ var VERSION string
 
 const (
 	EnRu         = "EnRu"
-	Description  = "EnRu Keyboard Layout Switcher (Linux/X11)"
-	debounceMs   = 150  // в миллисекундах
+	Description  = "EnRu Keyboard Layout Switcher (Linux)"
 	FreqRu       = 523  // C5 (До)
 	FreqEn       = 1046 // C6 (До на октаву выше)
-	BeepDuration = 100  // в миллисекундах
-
-	// X11 GrabMode
-	GrabModeSync  = 1
-	GrabModeAsync = 2
-
-	// X11 Keycodes для Ctrl (X11 keycode = physical scan code + 8)
-	KeyCodeLCtrl = 0x25 + 8 // 37
-	KeyCodeRCtrl = 0x69 + 8 // 109
-
-	// X11 event masks
-	KeyPressMask   = 1 << 0
-	KeyReleaseMask = 1 << 1
+	BeepDuration = 100  // миллисекунды
+	scanPeriod   = 4 * time.Second
 )
 
 var (
-	exe               string
-	err               error
-	lastProcessedKey  byte
-	lastProcessedTime int64
+	exe string
+	err error
 )
-
-func checkEnvironment() {
-	// Проверка наличия GUI (X11 дисплей)
-	display := os.Getenv("DISPLAY")
-	if display == "" {
-		fmt.Fprintln(os.Stderr, "Ошибка: Нет X11 дисплея (нет GUI). Убедитесь, что переменная DISPLAY установлена.")
-		os.Exit(1)
-	}
-
-	// Проверка что не Wayland
-	sessionType := strings.ToLower(os.Getenv("XDG_SESSION_TYPE"))
-	if sessionType == "wayland" {
-		fmt.Fprintln(os.Stderr, "Ошибка: Wayland не поддерживается. Глобальный перехват клавиатуры невозможен в Wayland по соображениям безопасности.")
-		fmt.Fprintln(os.Stderr, "Переключитесь на X11-сессию (обычно при логине можно выбрать «Xorg» или «Ubuntu on Xorg»).")
-		os.Exit(1)
-	}
-}
 
 // generateWAV генерирует WAV-данные для тона заданной частоты и длительности
 func generateWAV(freq uint, durationMs int) []byte {
@@ -118,7 +88,6 @@ func generateWAV(freq uint, durationMs int) []byte {
 }
 
 func sin(x float64) float64 {
-	// Простая аппроксимация синуса (достаточно для beep)
 	pi := 3.14159265358979323846
 	x = x - float64(int(x/(2*pi)))*2*pi
 	if x < 0 {
@@ -139,7 +108,6 @@ func playBeep(freq uint) {
 	}
 	defer os.Remove(wavPath)
 
-	// Пытаемся paplay (PulseAudio/PipeWire)
 	if _, err := exec.LookPath("paplay"); err == nil {
 		cmd := exec.Command("paplay", wavPath)
 		if err := cmd.Run(); err == nil {
@@ -147,7 +115,6 @@ func playBeep(freq uint) {
 		}
 	}
 
-	// Пытаемся aplay (ALSA)
 	if _, err := exec.LookPath("aplay"); err == nil {
 		cmd := exec.Command("aplay", "-q", wavPath)
 		if err := cmd.Run(); err == nil {
@@ -155,11 +122,9 @@ func playBeep(freq uint) {
 		}
 	}
 
-	// Запасной вариант: терминальный bell
 	fmt.Print("\a")
 }
 
-// generateWAVFile создаёт временный WAV файл для воспроизведения
 func generateWAVFile(freq uint, durationMs int) (string, error) {
 	data := generateWAV(freq, durationMs)
 	tmpFile, err := os.CreateTemp("", "enru-beep-*.wav")
@@ -175,98 +140,178 @@ func generateWAVFile(freq uint, durationMs int) (string, error) {
 	return tmpFile.Name(), nil
 }
 
-func switchLayout(group uint8) error {
-	var layout string
-	switch group {
-	case 0:
-		layout = "us"
-	case 1:
-		layout = "ru"
-	default:
-		return fmt.Errorf("неизвестная группа раскладки: %d", group)
+// switchLayout переключает раскладку через KDE D-Bus
+func switchLayout(group uint) error {
+	conn, err := dbus.ConnectSessionBus()
+	if err != nil {
+		return fmt.Errorf("D-Bus connect: %v", err)
 	}
-	cmd := exec.Command("setxkbmap", "-layout", layout)
-	if err := cmd.Run(); err != nil {
-		return fmt.Errorf("setxkbmap %s: %v", layout, err)
+	defer conn.Close()
+
+	obj := conn.Object("org.kde.keyboard", "/Layouts")
+	call := obj.Call("org.kde.KeyboardLayouts.setLayout", 0, group)
+	if call.Err != nil {
+		return fmt.Errorf("D-Bus setLayout(%d): %v", group, call.Err)
 	}
 	return nil
 }
 
-func keyEventLoop(X *xgb.Conn) error {
-	setup := xproto.Setup(X)
-	screen := setup.DefaultScreen(X)
-	root := screen.Root
+// getKeyCode возвращает evdev код клавиши по имени
+func getKeyCode(keysym string) (uint16, error) {
+	for evdevKeyCode, evdevKeySym := range evdev.KEY {
+		if evdevKeySym == "KEY_"+keysym {
+			return uint16(evdevKeyCode), nil
+		}
+	}
+	return 0, fmt.Errorf("keycode for KEY_%s not found", keysym)
+}
 
-	// Грабим Ctrl клавиши
-	// GrabModeSync позволяет нам увидеть событие и затем решить, пропустить его дальше
-	// Note: GrabKey doesn't return an error directly in XGB - errors come through the event loop
-	xproto.GrabKey(X, true, root,
-		xproto.ModMaskAny, xproto.Keycode(KeyCodeLCtrl),
-		xproto.GrabModeSync, xproto.GrabModeAsync)
+// message объединяет устройство и события для передачи по каналу
+type message struct {
+	Device *evdev.InputDevice
+	Events []evdev.InputEvent
+}
 
-	xproto.GrabKey(X, true, root,
-		xproto.ModMaskAny, xproto.Keycode(KeyCodeRCtrl),
-		xproto.GrabModeSync, xproto.GrabModeAsync)
+func getInputDevices() map[string]*evdev.InputDevice {
+	inputDevices := make(map[string]*evdev.InputDevice)
+	devicePaths, err := evdev.ListInputDevicePaths("/dev/input/event*")
+	if err == nil && len(devicePaths) > 0 {
+		for _, devicePath := range devicePaths {
+			device, err := evdev.Open(devicePath)
+			if err != nil {
+				continue
+			}
+			inputDevices[devicePath] = device
+		}
+	}
+	return inputDevices
+}
 
-	X.Sync()
+func isKeyboard(device *evdev.InputDevice) bool {
+	caps, ok := device.Capabilities["EV_KEY"]
+	if !ok {
+		return false
+	}
+	// Клавиатура должна иметь KEY_LEFTCTRL (29) и KEY_SPACE (57)
+	_, hasCtrl := caps[29]
+	_, hasSpace := caps[57]
+	return hasCtrl && hasSpace
+}
+
+func scanDevices(inbox chan message, scanOnce bool) {
+	keyboards := make(map[string]*evdev.InputDevice)
+	kbdLost := make(chan string, 8)
 
 	for {
-		ev, err := X.WaitForEvent()
-		if err != nil {
-			return fmt.Errorf("WaitForEvent: %v", err)
-		}
-		if ev == nil {
-			continue
-		}
-
-		switch keyEv := ev.(type) {
-		case xproto.KeyReleaseEvent:
-			// Разрешаем событию пройти дальше к приложению
-			xproto.AllowEvents(X, xproto.AllowReplayPointer, xproto.Timestamp(keyEv.Time))
-			X.Sync()
-
-			now := time.Now().UnixNano() / 1e6 // ms
-			keyCode := byte(keyEv.Detail)
-
-			if keyCode == lastProcessedKey && (now-lastProcessedTime) < int64(debounceMs) {
-				continue // Уже обрабатывали недавно
-			}
-
-			lastProcessedKey = keyCode
-			lastProcessedTime = now
-
-			switch keyCode {
-			case KeyCodeLCtrl:
-				playBeep(FreqEn)
-				if err := switchLayout(0); err != nil {
-					fmt.Printf("Переключение на English: %v\n", err)
+		select {
+		case name := <-kbdLost:
+			delete(keyboards, name)
+		default:
+			for devicePath, device := range getInputDevices() {
+				if isKeyboard(device) {
+					if _, ok := keyboards[devicePath]; !ok {
+						log.Printf("Клавиатура: %s (%s)", device.Name, devicePath)
+						keyboards[devicePath] = device
+						go listenEvents(devicePath, device, inbox, kbdLost)
+					}
 				} else {
-					fmt.Println("Переключено на English")
-				}
-			case KeyCodeRCtrl:
-				playBeep(FreqRu)
-				if err := switchLayout(1); err != nil {
-					fmt.Printf("Переключение на Русский: %v\n", err)
-				} else {
-					fmt.Println("Переключено на Русский")
+					device.File.Close()
 				}
 			}
-
-		case xproto.KeyPressEvent:
-			// Просто пропускаем KeyPress
-			xproto.AllowEvents(X, xproto.AllowReplayPointer, xproto.Timestamp(keyEv.Time))
-			X.Sync()
+			if scanOnce {
+				return
+			}
+			time.Sleep(scanPeriod)
 		}
 	}
 }
 
-func cleanup(X *xgb.Conn, root xproto.Window) {
-	if X == nil {
-		return
+func listenEvents(name string, kbd *evdev.InputDevice, replyTo chan message, kbdLost chan string) {
+	for {
+		events, err := kbd.Read()
+		if err != nil || len(events) == 0 {
+			log.Printf("Клавиатура %s отключена", kbd.Name)
+			kbdLost <- name
+			return
+		}
+		replyTo <- message{Device: kbd, Events: events}
 	}
-	_ = xproto.UngrabKey(X, xproto.Keycode(KeyCodeLCtrl), root, xproto.ModMaskAny)
-	_ = xproto.UngrabKey(X, xproto.Keycode(KeyCodeRCtrl), root, xproto.ModMaskAny)
-	X.Close()
+}
+
+func keyName(code uint16) string {
+	if name, ok := evdev.KEY[int(code)]; ok {
+		return strings.TrimPrefix(name, "KEY_")
+	}
+	return fmt.Sprintf("KEY_%d", code)
+}
+
+func valueName(v int32) string {
+	switch v {
+	case 0:
+		return "released"
+	case 1:
+		return "pressed"
+	case 2:
+		return "hold"
+	default:
+		return fmt.Sprintf("undefined(%d)", v)
+	}
+}
+
+func listenKeyboards(leftCode, rightCode uint16, printMode bool) {
+	inbox := make(chan message, 8)
+
+	go scanDevices(inbox, false)
+
+	var useGroup int
+	var prevKey evdev.InputEvent
+
+	for msg := range inbox {
+		for _, ev := range msg.Events {
+			if ev.Type != evdev.EV_KEY {
+				continue
+			}
+			// Skip duplicates
+			if prevKey.Code == ev.Code && prevKey.Value == ev.Value {
+				continue
+			}
+			prevKey = ev
+
+			if printMode {
+				log.Printf("%s type:%v code:%v(%s) %s", msg.Device.Name, ev.Type, ev.Code, keyName(ev.Code), valueName(ev.Value))
+			}
+
+			switch ev.Value {
+			case 1: // key down
+				useGroup = 0
+				if ev.Code == leftCode {
+					useGroup = 1
+				} else if ev.Code == rightCode {
+					useGroup = 2
+				}
+			case 0: // key up
+				if useGroup == 0 {
+					break
+				}
+				if ev.Code == leftCode && useGroup == 1 {
+					playBeep(FreqEn)
+					if err := switchLayout(0); err != nil {
+						log.Printf("English: %v", err)
+					} else {
+						log.Println("→ English")
+					}
+				} else if ev.Code == rightCode && useGroup == 2 {
+					playBeep(FreqRu)
+					if err := switchLayout(1); err != nil {
+						log.Printf("Русский: %v", err)
+					} else {
+						log.Println("→ Русский")
+					}
+				}
+				useGroup = 0
+			}
+		}
+	}
 }
 
 func stopTask() error {
@@ -347,7 +392,6 @@ func forkBackground() error {
 	cmd.SysProcAttr = &syscall.SysProcAttr{
 		Setsid: true,
 	}
-	// Отсоединяем stdin/stdout/stderr
 	cmd.Stdin = nil
 	cmd.Stdout = nil
 	cmd.Stderr = nil
@@ -358,9 +402,38 @@ func forkBackground() error {
 	return nil
 }
 
-func main() {
-	checkEnvironment()
+func runConsole() {
+	// Определяем коды клавиш
+	leftCode, err := getKeyCode("LEFTCTRL")
+	if err != nil {
+		log.Fatalf("Не найден код LEFTCTRL: %v", err)
+	}
+	rightCode, err := getKeyCode("RIGHTCTRL")
+	if err != nil {
+		log.Fatalf("Не найден код RIGHTCTRL: %v", err)
+	}
 
+	fmt.Printf("LEFTCTRL=%d RIGHTCTRL=%d\n", leftCode, rightCode)
+
+	// Обработка сигналов для корректного завершения
+	sigChan := make(chan os.Signal, 1)
+	signal.Notify(sigChan, syscall.SIGINT, syscall.SIGTERM)
+
+	go func() {
+		<-sigChan
+		fmt.Println("\nПолучен сигнал завершения...")
+		os.Exit(0)
+	}()
+
+	fmt.Println("Запущена в консоли (evdev)")
+	fmt.Println("Левый Ctrl -> Английский")
+	fmt.Println("Правый Ctrl -> Русский")
+	fmt.Println("Для остановки нажмите Ctrl+C")
+
+	listenKeyboards(leftCode, rightCode, true)
+}
+
+func main() {
 	exe, err = os.Executable()
 	if err == nil {
 		exe, err = filepath.EvalSymlinks(exe)
@@ -432,37 +505,4 @@ func main() {
 	fmt.Println("Запущена в фоновом режиме")
 	fmt.Println("Левый Ctrl -> Английский")
 	fmt.Println("Правый Ctrl -> Русский")
-}
-
-func runConsole() {
-	X, err := xgb.NewConn()
-	if err != nil {
-		fmt.Printf("Не удалось подключиться к X11: %v\n", err)
-		os.Exit(1)
-	}
-	defer X.Close()
-
-	setup := xproto.Setup(X)
-	screen := setup.DefaultScreen(X)
-	root := screen.Root
-
-	// Обработка сигналов для корректного завершения
-	sigChan := make(chan os.Signal, 1)
-	signal.Notify(sigChan, syscall.SIGINT, syscall.SIGTERM)
-
-	go func() {
-		<-sigChan
-		fmt.Println("\nПолучен сигнал завершения...")
-		cleanup(X, root)
-		os.Exit(0)
-	}()
-
-	fmt.Println("Запущена в консоли (X11)")
-	fmt.Println("Левый Ctrl -> Английский")
-	fmt.Println("Правый Ctrl -> Русский")
-	fmt.Println("Для остановки нажмите Ctrl+C")
-
-	if err := keyEventLoop(X); err != nil {
-		fmt.Printf("Ошибка в цикле обработки: %v\n", err)
-	}
 }
