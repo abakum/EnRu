@@ -11,18 +11,18 @@ BUILD   := build -ldflags="-s -w"
 all: windows linux
 
 windows:
-	GOOS=windows CGO_ENABLED=0 go $(BUILD) -o "$(PROGRAM_NAME).exe" ./cmd/windows/EnRu/
+	GOOS=windows CGO_ENABLED=0 go $(BUILD) -o "$(PROGRAM_NAME).exe" ./cmd/EnRu/
 
 linux:
-	GOOS=linux CGO_ENABLED=1 go $(BUILD) -o "$(PROGRAM_NAME)" ./cmd/linux/EnRu/
+	GOOS=linux CGO_ENABLED=1 go $(BUILD) -o "$(PROGRAM_NAME)" ./cmd/EnRu/
 
 install: windows-install linux-install
 
 windows-install:
-	GOOS=windows CGO_ENABLED=0 go $(INSTALL) ./cmd/windows/EnRu/
+	GOOS=windows CGO_ENABLED=0 go $(INSTALL) ./cmd/EnRu/
 
 linux-install:
-	GOOS=linux CGO_ENABLED=1 go $(INSTALL) ./cmd/linux/EnRu/
+	GOOS=linux CGO_ENABLED=1 go $(INSTALL) ./cmd/EnRu/
 
 clean:
 	rm -f "$(PROGRAM_NAME)" "$(PROGRAM_NAME).exe"

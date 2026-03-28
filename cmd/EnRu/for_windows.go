@@ -3,7 +3,6 @@
 package main
 
 import (
-	_ "embed"
 	"fmt"
 	"os"
 	"os/exec"
@@ -15,18 +14,9 @@ import (
 	"time"
 	"unsafe"
 
-	version "github.com/abakum/version/lib"
 	"github.com/jxeng/shortcut"
-	"github.com/mitchellh/go-ps"
 	"golang.org/x/sys/windows"
 )
-
-var _ = version.Ver
-
-//go:generate go run github.com/abakum/version
-
-//go:embed VERSION
-var VERSION string
 
 const (
 	WH_KEYBOARD_LL            = 13
@@ -38,16 +28,12 @@ const (
 
 	KEYEVENTF_KEYUP = 0x0002
 
-	GW_HWNDPREV         = 3
-	GW_HWNDPARENT       = 4
-	EnRu                = "EnRu"
-	Description         = "EnRu Keyboard Layout Switcher"
-	En                  = "00000409"
-	Ru                  = "00000419"
-	debounceMs    int64 = 150  // в миллисекундах
-	FreqRu              = 523  // C5 (До)
-	FreqEn              = 1046 // C6 (До на октаву выше)
-	BeepDuration        = 100 * time.Millisecond
+	GW_HWNDPREV   = 3
+	GW_HWNDPARENT = 4
+	Description   = "EnRu Keyboard Layout Switcher"
+	En            = "00000409"
+	Ru            = "00000419"
+	debounceMs    = 150 // в миллисекундах
 )
 
 var (
@@ -72,8 +58,6 @@ var (
 	procBeep = kernel32.NewProc("Beep")
 
 	hook              uintptr
-	exe               string
-	err               error
 	lastProcessedKey  uint32
 	lastProcessedTime int64
 )
@@ -97,6 +81,49 @@ type MSG struct {
 
 type POINT struct {
 	X, Y int32
+}
+
+// Abs возвращает абсолютный путь, приводя букву диска к нижнему регистру (только для Windows).
+func Abs(path string) (string, error) {
+	absPath, err := filepath.Abs(path)
+	if err != nil {
+		return "", err
+	}
+
+	// Если путь начинается с буквы диска (например, "C:\"), делаем её строчной.
+	if len(absPath) > 1 && absPath[1] == ':' {
+		absPath = strings.ToLower(absPath[:1]) + absPath[1:]
+	}
+
+	return absPath, nil
+}
+
+func resolveExe() string {
+	exe, err := os.Executable()
+	if err == nil {
+		// Как в маке
+		exe, err = filepath.EvalSymlinks(exe)
+	}
+
+	if err != nil {
+		if lp, err := exec.LookPath(os.Args[0]); err == nil {
+			return lp
+		} else if abs, err := Abs(os.Args[0]); err == nil {
+			return abs
+		}
+		fmt.Println(err)
+		os.Exit(1)
+	}
+	return exe
+}
+
+func printVersionInfo() {
+	s := ""
+	if info, ok := debug.ReadBuildInfo(); ok {
+		s = "Собрано " + info.GoVersion
+	}
+	majorVersion, minorVersion, buildNumber := windows.RtlGetNtVersionNumbers()
+	fmt.Println(Description, exe, VERSION, s, fmt.Sprintf("%d.%d.%d on %s", majorVersion, minorVersion, buildNumber, runtime.GOARCH))
 }
 
 func playBeep(freq uint) {
@@ -245,145 +272,6 @@ func switchLanguage(layoutID string) {
 	fmt.Printf("Не удалось переключиться на: %s\n", layoutID)
 }
 
-// Abs возвращает абсолютный путь, приводя букву диска к нижнему регистру (только для Windows).
-func Abs(path string) (string, error) {
-	absPath, err := filepath.Abs(path)
-	if err != nil {
-		return "", err
-	}
-
-	// Если путь начинается с буквы диска (например, "C:\"), делаем её строчной.
-	if len(absPath) > 1 && absPath[1] == ':' {
-		absPath = strings.ToLower(absPath[:1]) + absPath[1:]
-	}
-
-	return absPath, nil
-}
-
-func main() {
-	exe, err = os.Executable()
-	if err == nil {
-		// Как в маке
-		exe, err = filepath.EvalSymlinks(exe)
-	}
-
-	if err != nil {
-		if lp, err := exec.LookPath(os.Args[0]); err == nil {
-			exe = lp
-		} else if abs, err := Abs(os.Args[0]); err == nil {
-			exe = abs
-		} else {
-			fmt.Println(err)
-			return
-		}
-	}
-
-	s := ""
-	if info, ok := debug.ReadBuildInfo(); ok {
-		s = "Собрано " + info.GoVersion
-	}
-	majorVersion, minorVersion, buildNumber := windows.RtlGetNtVersionNumbers()
-	fmt.Println(Description, exe, VERSION, s, fmt.Sprintf("%d.%d.%d on %s", majorVersion, minorVersion, buildNumber, runtime.GOARCH))
-	if len(os.Args) > 1 {
-		switch os.Args[1] {
-		case "install":
-			if err := setupStartupShortcut(); err != nil {
-				fmt.Printf("Не удалось установить ярлык в папку автозагрузки: %v\n", err)
-			}
-			fallthrough
-		case "start":
-		case "uninstall":
-			if err := removeStartupShortcut(); err != nil {
-				fmt.Printf("Не удалось убрать ярлык из папки автозагрузки: %v\n", err)
-			}
-			fallthrough
-		case "stop":
-			if err := stopTask(); err != nil {
-				fmt.Printf("Не удалось остановить: %v\n", err)
-			}
-			return
-		case "console":
-			stopTask()
-			if err := setHook(); err != nil {
-				fmt.Println(err)
-				return
-			}
-			defer unhook()
-			fmt.Println("Запущена в фоновом режиме")
-			fmt.Println("Левый Ctrl -> Английский")
-			fmt.Println("Правый Ctrl -> Русский")
-			fmt.Println("Для остановки нажмите Ctrl+C")
-			messageLoop()
-		}
-	}
-	fmt.Println("Используй команды: install, start, uninstall, stop, console")
-	fmt.Println("По команде start остановится и запустится в фоновом режиме")
-	fmt.Println("По команде install установится в автозагрузку shell:startup остановится и запустится в фоновом режиме")
-	fmt.Println("По команде uninstall уберётся из автозагрузки shell:startup и остановится")
-	fmt.Println("Без команды или с неправильной командой остановится и запустится в фоновом режиме")
-	fmt.Println("По команде console запустится в консоле для отладки")
-
-	cmd := exec.Command(exe, "console")
-	background(cmd)
-
-	if err := cmd.Start(); err != nil {
-		fmt.Printf("Ошибка запуска: %v\n", err)
-		return
-	}
-
-	fmt.Println("Запущена в фоновом режиме")
-	fmt.Println("Левый Ctrl -> Английский")
-	fmt.Println("Правый Ctrl -> Русский")
-}
-
-func stopTask() error {
-	// Ищем процесс по имени
-	processes, err := ps.Processes()
-	if err != nil {
-		return fmt.Errorf("не удалось получить процессы: %v", err)
-	}
-
-	found := false
-	pid := os.Getpid()
-	for _, p := range processes {
-		if p == nil || p.Pid() == pid {
-			continue
-		}
-		if strings.EqualFold(p.Executable(), filepath.Base(exe)) {
-			found = true
-			// Находим фоновый процесс
-			proc, err := os.FindProcess(p.Pid())
-			if err != nil {
-				return fmt.Errorf("не удалось найти фоновый процесс %d: %v", p.Pid(), err)
-			}
-
-			err = proc.Kill()
-			if err != nil {
-				return fmt.Errorf("не удалось остановить фоновый процесс %d: %v", p.Pid(), err)
-			}
-
-			fmt.Printf("Фоновый процесс %d остановлен\n", p.Pid())
-			time.Sleep(100 * time.Millisecond)
-		}
-	}
-
-	if !found {
-		fmt.Println("Фоновый процесс не запущен")
-	}
-
-	return nil
-}
-
-func background(cmd *exec.Cmd) {
-	cmd.SysProcAttr = &syscall.SysProcAttr{
-		CreationFlags:    windows.CREATE_NO_WINDOW,
-		NoInheritHandles: true,
-	}
-	cmd.Stdout = nil
-	cmd.Stderr = nil
-	cmd.Stdin = nil
-}
-
 func getWindowClass(hwnd uintptr) string {
 	if hwnd == 0 {
 		return ""
@@ -424,7 +312,16 @@ func getKeyboardLayout(hwnd uintptr) uintptr {
 	return layout
 }
 
-func setupStartupShortcut() error {
+func findProgman() uintptr {
+	className, _ := windows.UTF16PtrFromString("Progman")
+	hwnd, _, _ := procFindWindow.Call(
+		uintptr(unsafe.Pointer(className)),
+		0,
+	)
+	return hwnd
+}
+
+func installAutostart() error {
 	// Получаем путь к папке автозагрузки
 	startupDir, err := getStartupDir()
 	if err != nil {
@@ -452,17 +349,7 @@ func setupStartupShortcut() error {
 	return nil
 }
 
-func getStartupDir() (string, error) {
-	// Для текущего пользователя
-	dir := os.Getenv("APPDATA")
-	if dir == "" {
-		return "", fmt.Errorf("не найдена переменная среды APPDATA")
-	}
-	return filepath.Join(dir, "Microsoft", "Windows", "Start Menu", "Programs", "Startup"), nil
-}
-
-// Функция удаления ярлыка из автозагрузки
-func removeStartupShortcut() error {
+func removeAutostart() error {
 	startupDir, err := getStartupDir()
 	if err != nil {
 		return err
@@ -478,11 +365,53 @@ func removeStartupShortcut() error {
 	return nil
 }
 
-func findProgman() uintptr {
-	className, _ := windows.UTF16PtrFromString("Progman")
-	hwnd, _, _ := procFindWindow.Call(
-		uintptr(unsafe.Pointer(className)),
-		0,
-	)
-	return hwnd
+func getStartupDir() (string, error) {
+	// Для текущего пользователя
+	dir := os.Getenv("APPDATA")
+	if dir == "" {
+		return "", fmt.Errorf("не найдена переменная среды APPDATA")
+	}
+	return filepath.Join(dir, "Microsoft", "Windows", "Start Menu", "Programs", "Startup"), nil
+}
+
+func background(cmd *exec.Cmd) {
+	cmd.SysProcAttr = &syscall.SysProcAttr{
+		CreationFlags:    windows.CREATE_NO_WINDOW,
+		NoInheritHandles: true,
+	}
+	cmd.Stdout = nil
+	cmd.Stderr = nil
+	cmd.Stdin = nil
+}
+
+func startBackground() {
+	cmd := exec.Command(exe, "console")
+	background(cmd)
+
+	if err := cmd.Start(); err != nil {
+		fmt.Printf("Ошибка запуска: %v\n", err)
+		os.Exit(1)
+	}
+}
+
+func startConsole() {
+	if err := setHook(); err != nil {
+		fmt.Println(err)
+		os.Exit(1)
+	}
+	defer unhook()
+	fmt.Println("Запущена в фоновом режиме")
+	fmt.Println("Левый Ctrl -> Английский")
+	fmt.Println("Правый Ctrl -> Русский")
+	fmt.Println("Для остановки нажмите Ctrl+C")
+	messageLoop()
+}
+
+func printUsage() {
+	fmt.Println("Используй команды: install, start, uninstall, stop, console")
+	fmt.Println("По команде start остановится и запустится в фоновом режиме")
+	fmt.Println("По команде install установится в автозагрузку shell:startup остановится и запустится в фоновом режиме")
+	fmt.Println("По команде uninstall уберётся из автозагрузки shell:startup и остановится")
+	fmt.Println("Без команды или с неправильной командой остановится и запустится в фоновом режиме")
+	fmt.Println("По команде console запустится в консоле для отладки")
 }

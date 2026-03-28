@@ -3,10 +3,9 @@
 package main
 
 import (
-	_ "embed"
 	"encoding/binary"
 	"fmt"
-ь	"log"
+	"log"
 	"os"
 	"os/exec"
 	"os/signal"
@@ -19,30 +18,37 @@ import (
 
 	"github.com/godbus/dbus/v5"
 	"github.com/grafov/evdev"
-	version "github.com/abakum/version/lib"
-	"github.com/mitchellh/go-ps"
 )
-
-var _ = version.Ver
-
-//go:generate go run github.com/abakum/version
-
-//go:embed VERSION
-var VERSION string
 
 const (
-	EnRu         = "EnRu"
-	Description  = "EnRu Keyboard Layout Switcher (Linux)"
-	FreqRu       = 523  // C5 (До)
-	FreqEn       = 1046 // C6 (До на октаву выше)
-	BeepDuration = 100  // миллисекунды
-	scanPeriod   = 4 * time.Second
+	Description = "EnRu Keyboard Layout Switcher (Linux)"
+	scanPeriod  = 4 * time.Second
 )
 
-var (
-	exe string
-	err error
-)
+func resolveExe() string {
+	exe, err := os.Executable()
+	if err == nil {
+		exe, err = filepath.EvalSymlinks(exe)
+	}
+	if err != nil {
+		if lp, err := exec.LookPath(os.Args[0]); err == nil {
+			return lp
+		} else if abs, err := filepath.Abs(os.Args[0]); err == nil {
+			return abs
+		}
+		fmt.Println(err)
+		os.Exit(1)
+	}
+	return exe
+}
+
+func printVersionInfo() {
+	s := ""
+	if info, ok := debug.ReadBuildInfo(); ok {
+		s = "Собрано " + info.GoVersion
+	}
+	fmt.Println(Description, exe, VERSION, s, runtime.GOOS+"/"+runtime.GOARCH)
+}
 
 // generateWAV генерирует WAV-данные для тона заданной частоты и длительности
 func generateWAV(freq uint, durationMs int) []byte {
@@ -101,7 +107,7 @@ func sin(x float64) float64 {
 }
 
 func playBeep(freq uint) {
-	wavPath, err := generateWAVFile(freq, BeepDuration)
+	wavPath, err := generateWAVFile(freq, int(BeepDuration.Milliseconds()))
 	if err != nil {
 		fmt.Print("\a")
 		return
@@ -314,43 +320,7 @@ func listenKeyboards(leftCode, rightCode uint16, printMode bool) {
 	}
 }
 
-func stopTask() error {
-	processes, err := ps.Processes()
-	if err != nil {
-		return fmt.Errorf("не удалось получить процессы: %v", err)
-	}
-
-	found := false
-	pid := os.Getpid()
-	for _, p := range processes {
-		if p == nil || p.Pid() == pid {
-			continue
-		}
-		if strings.EqualFold(p.Executable(), filepath.Base(exe)) {
-			found = true
-			proc, err := os.FindProcess(p.Pid())
-			if err != nil {
-				return fmt.Errorf("не удалось найти фоновый процесс %d: %v", p.Pid(), err)
-			}
-
-			err = proc.Kill()
-			if err != nil {
-				return fmt.Errorf("не удалось остановить фоновый процесс %d: %v", p.Pid(), err)
-			}
-
-			fmt.Printf("Фоновый процесс %d остановлен\n", p.Pid())
-			time.Sleep(100 * time.Millisecond)
-		}
-	}
-
-	if !found {
-		fmt.Println("Фоновый процесс не запущен")
-	}
-
-	return nil
-}
-
-func setupAutostart() error {
+func installAutostart() error {
 	autostartDir := filepath.Join(os.Getenv("HOME"), ".config", "autostart")
 	if err := os.MkdirAll(autostartDir, 0755); err != nil {
 		return fmt.Errorf("не удалось создать директорию автозагрузки: %v", err)
@@ -387,7 +357,7 @@ func removeAutostart() error {
 	return nil
 }
 
-func forkBackground() error {
+func startBackground() {
 	cmd := exec.Command(exe, "console")
 	cmd.SysProcAttr = &syscall.SysProcAttr{
 		Setsid: true,
@@ -397,12 +367,12 @@ func forkBackground() error {
 	cmd.Stderr = nil
 
 	if err := cmd.Start(); err != nil {
-		return fmt.Errorf("не удалось запустить в фоне: %v", err)
+		fmt.Printf("Ошибка запуска в фоне: %v\n", err)
+		os.Exit(1)
 	}
-	return nil
 }
 
-func runConsole() {
+func startConsole() {
 	// Определяем коды клавиш
 	leftCode, err := getKeyCode("LEFTCTRL")
 	if err != nil {
@@ -433,76 +403,11 @@ func runConsole() {
 	listenKeyboards(leftCode, rightCode, true)
 }
 
-func main() {
-	exe, err = os.Executable()
-	if err == nil {
-		exe, err = filepath.EvalSymlinks(exe)
-	}
-	if err != nil {
-		if lp, err := exec.LookPath(os.Args[0]); err == nil {
-			exe = lp
-		} else if abs, err := filepath.Abs(os.Args[0]); err == nil {
-			exe = abs
-		} else {
-			fmt.Println(err)
-			return
-		}
-	}
-
-	s := ""
-	if info, ok := debug.ReadBuildInfo(); ok {
-		s = "Собрано " + info.GoVersion
-	}
-	fmt.Println(Description, exe, VERSION, s, runtime.GOOS+"/"+runtime.GOARCH)
-
-	if len(os.Args) > 1 {
-		switch os.Args[1] {
-		case "install":
-			if err := setupAutostart(); err != nil {
-				fmt.Printf("Не удалось установить автозагрузку: %v\n", err)
-			}
-			fallthrough
-		case "start":
-			stopTask()
-			if err := forkBackground(); err != nil {
-				fmt.Printf("Ошибка запуска в фоне: %v\n", err)
-			} else {
-				fmt.Println("Запущена в фоновом режиме")
-				fmt.Println("Левый Ctrl -> Английский")
-				fmt.Println("Правый Ctrl -> Русский")
-			}
-			return
-		case "uninstall":
-			if err := removeAutostart(); err != nil {
-				fmt.Printf("Не удалось убрать автозагрузку: %v\n", err)
-			}
-			fallthrough
-		case "stop":
-			if err := stopTask(); err != nil {
-				fmt.Printf("Не удалось остановить: %v\n", err)
-			}
-			return
-		case "console":
-			stopTask()
-			runConsole()
-			return
-		}
-	}
-
+func printUsage() {
 	fmt.Println("Используй команды: install, start, uninstall, stop, console")
 	fmt.Println("По команде start остановится и запустится в фоновом режиме")
 	fmt.Println("По команде install установится в автозагрузку ~/.config/autostart/ остановится и запустится в фоновом режиме")
 	fmt.Println("По команде uninstall уберётся из автозагрузки и остановится")
 	fmt.Println("Без команды или с неправильной командой остановится и запустится в фоновом режиме")
 	fmt.Println("По команде console запустится в консоли для отладки")
-
-	stopTask()
-	if err := forkBackground(); err != nil {
-		fmt.Printf("Ошибка запуска в фоне: %v\n", err)
-		return
-	}
-
-	fmt.Println("Запущена в фоновом режиме")
-	fmt.Println("Левый Ctrl -> Английский")
-	fmt.Println("Правый Ctrl -> Русский")
 }
