@@ -268,23 +268,32 @@ func listenKeyboards(leftCode, rightCode uint16, printMode bool) {
 	inbox := make(chan message, 8)
 
 	go scanDevices(inbox, false)
+	go listenX11Record(inbox)
 
 	var useGroup int
 	var prevKey evdev.InputEvent
+	var prevKeyTime time.Time
+	dupWindow := 50 * time.Millisecond
 
 	for msg := range inbox {
 		for _, ev := range msg.Events {
 			if ev.Type != evdev.EV_KEY {
 				continue
 			}
-			// Skip duplicates
-			if prevKey.Code == ev.Code && prevKey.Value == ev.Value {
+			// Skip duplicates (same key+state from evdev and X11)
+			now := time.Now()
+			if prevKey.Code == ev.Code && prevKey.Value == ev.Value && now.Sub(prevKeyTime) < dupWindow {
 				continue
 			}
 			prevKey = ev
+			prevKeyTime = now
 
 			if printMode {
-				log.Printf("%s type:%v code:%v(%s) %s", msg.Device.Name, ev.Type, ev.Code, keyName(ev.Code), valueName(ev.Value))
+				name := "X11"
+				if msg.Device != nil {
+					name = msg.Device.Name
+				}
+				log.Printf("%s type:%v code:%v(%s) %s", name, ev.Type, ev.Code, keyName(ev.Code), valueName(ev.Value))
 			}
 
 			switch ev.Value {
