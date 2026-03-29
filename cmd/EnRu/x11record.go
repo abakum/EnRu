@@ -37,6 +37,8 @@ static int enable_xrecord(Display *data, XRecordContext ctx) {
 import "C"
 
 import (
+	"context"
+	"fmt"
 	"log"
 	"os"
 	"time"
@@ -72,51 +74,72 @@ func xrecordKeyCallback(keycode C.int, pressed C.int) {
 
 // listenX11Record запускает XRecord для перехвата X11-событий клавиатуры (включая VNC/XTest).
 // Блокируется, работает в отдельной горутине.
-func listenX11Record(inbox chan<- message) {
+func listenX11Record(ctx context.Context, inbox chan<- message) {
 	if os.Getenv("DISPLAY") == "" {
 		log.Println("X11: DISPLAY не задан, XRecord не запущен")
 		return
 	}
 
+	for {
+		select {
+		case <-ctx.Done():
+			log.Println("X11: XRecord остановлен")
+			return
+		default:
+		}
+
+		if err := runX11Record(ctx, inbox); err != nil {
+			log.Printf("X11: %v, перезапуск через 5 сек...", err)
+			select {
+			case <-ctx.Done():
+				log.Println("X11: XRecord остановлен")
+				return
+			case <-time.After(5 * time.Second):
+			}
+		} else {
+			log.Println("X11: XRecord завершился")
+			return
+		}
+	}
+}
+
+// runX11Record создаёт XRecord-контекст и перехватывает события.
+// Возвращает nil при нормальном завершении, или ошибку при сбое.
+func runX11Record(_ context.Context, inbox chan<- message) error {
 	// Два соединения: control (создание контекста) и data (чтение событий)
 	ctrlDisplay := C.XOpenDisplay(nil)
 	if ctrlDisplay == nil {
-		log.Println("X11: не удалось открыть control display")
-		return
+		return fmt.Errorf("не удалось открыть control display")
 	}
 	defer C.XCloseDisplay(ctrlDisplay)
 
 	dataDisplay := C.XOpenDisplay(nil)
 	if dataDisplay == nil {
-		log.Println("X11: не удалось открыть data display")
-		return
+		return fmt.Errorf("не удалось открыть data display")
 	}
 	defer C.XCloseDisplay(dataDisplay)
 
 	// Проверяем поддержку XRecord
 	var major, minor C.int
 	if C.XRecordQueryVersion(ctrlDisplay, &major, &minor) == 0 {
-		log.Println("X11: XRecord extension не поддерживается")
-		return
+		return fmt.Errorf("XRecord extension не поддерживается")
 	}
 
 	// Создаём диапазон перехватываемых событий — только клавиатура
 	recordRange := C.XRecordAllocRange()
 	if recordRange == nil {
-		log.Println("X11: не удалось создать XRecordRange")
-		return
+		return fmt.Errorf("не удалось создать XRecordRange")
 	}
 	defer C.XFree(unsafe.Pointer(recordRange))
 	recordRange.device_events.first = C.KeyPress
 	recordRange.device_events.last = C.KeyRelease
 
 	// Создаём контекст записи — перехват от всех клиентов
-	ctx := C.create_xrecord_context(ctrlDisplay, recordRange)
-	if ctx == 0 {
-		log.Println("X11: не удалось создать XRecordContext")
-		return
+	xrCtx := C.create_xrecord_context(ctrlDisplay, recordRange)
+	if xrCtx == 0 {
+		return fmt.Errorf("не удалось создать XRecordContext")
 	}
-	defer C.XRecordFreeContext(ctrlDisplay, ctx)
+	defer C.XRecordFreeContext(ctrlDisplay, xrCtx)
 
 	// Важно: сбрасываем буфер control-соединения, чтобы сервер
 	// успел зарегистрировать контекст до XRecordEnableContext
@@ -125,12 +148,9 @@ func listenX11Record(inbox chan<- message) {
 	x11Chan = inbox
 	log.Printf("X11: XRecord запущен (version %d.%d)", int(major), int(minor))
 
-	ret := C.enable_xrecord(dataDisplay, ctx)
+	ret := C.enable_xrecord(dataDisplay, xrCtx)
 	if ret == 0 {
-		log.Println("X11: XRecord завершился с ошибкой, перезапуск через 5 сек...")
-		time.Sleep(5 * time.Second)
-		go listenX11Record(inbox)
-	} else {
-		log.Println("X11: XRecord завершился")
+		return fmt.Errorf("XRecord завершился с ошибкой")
 	}
+	return nil
 }

@@ -3,6 +3,7 @@
 package main
 
 import (
+	"context"
 	"encoding/binary"
 	"fmt"
 	"log"
@@ -15,14 +16,11 @@ import (
 	"strings"
 	"syscall"
 	"time"
+	"unsafe"
 
 	"github.com/godbus/dbus/v5"
 	"github.com/grafov/evdev"
-)
-
-const (
-	Description = "EnRu Keyboard Layout Switcher (Linux)"
-	scanPeriod  = 4 * time.Second
+	"golang.org/x/sys/unix"
 )
 
 func resolveExe() string {
@@ -204,43 +202,150 @@ func isKeyboard(device *evdev.InputDevice) bool {
 	return hasCtrl && hasSpace
 }
 
-func scanDevices(inbox chan message, scanOnce bool) {
+// canAccessEvdev проверяет, есть ли у пользователя права на чтение /dev/input/event*
+func canAccessEvdev() bool {
+	paths, err := filepath.Glob("/dev/input/event*")
+	if err != nil || len(paths) == 0 {
+		return false
+	}
+	f, err := os.OpenFile(paths[0], os.O_RDONLY, 0)
+	if err != nil {
+		return false
+	}
+	f.Close()
+	return true
+}
+
+// inotifyEv — событие inotify, передаваемое по каналу
+type inotifyEv struct {
+	name string
+	mask uint32
+}
+
+// watchDevices отслеживает клавиатуры через inotify (без опроса).
+// Первичное сканирование + реакция на подключение/отключение устройств.
+func watchDevices(ctx context.Context, inbox chan message) {
+	if !canAccessEvdev() {
+		log.Println("evdev: нет доступа к /dev/input/event*")
+		log.Println("  Добавьте пользователя в группу input: sudo usermod -aG input $USER")
+		log.Println("  Работает только XRecord (VNC/X11)")
+		return
+	}
+
 	keyboards := make(map[string]*evdev.InputDevice)
 	kbdLost := make(chan string, 8)
 
+	// Первичное сканирование существующих устройств
+	for devicePath, device := range getInputDevices() {
+		if isKeyboard(device) {
+			log.Printf("Клавиатура: %s (%s)", device.Name, devicePath)
+			keyboards[devicePath] = device
+			go listenEvents(ctx, devicePath, device, inbox, kbdLost)
+		} else {
+			device.File.Close()
+		}
+	}
+
+	// inotify для отслеживания новых/удалённых устройств
+	fd, err := unix.InotifyInit()
+	if err != nil {
+		log.Printf("evdev: inotify: %v", err)
+		return
+	}
+	defer unix.Close(fd)
+
+	_, err = unix.InotifyAddWatch(fd, "/dev/input",
+		unix.IN_CREATE|unix.IN_DELETE|unix.IN_MOVED_TO)
+	if err != nil {
+		log.Printf("evdev: inotify: %v", err)
+		return
+	}
+
+	// Горутина для чтения событий inotify (неблокирующая)
+	inotifyCh := make(chan inotifyEv, 16)
+	go func() {
+		defer close(inotifyCh)
+		buf := make([]byte, unix.SizeofInotifyEvent+4096)
+		for {
+			n, err := unix.Read(fd, buf)
+			if err != nil {
+				return // fd закрыт → выход
+			}
+			var offset uint32
+			for offset < uint32(n) {
+				event := (*unix.InotifyEvent)(unsafe.Pointer(&buf[offset]))
+				nameLen := event.Len
+				if nameLen > 0 {
+					name := string(buf[offset+unix.SizeofInotifyEvent : offset+unix.SizeofInotifyEvent+nameLen])
+					name = strings.TrimRight(name, "\x00")
+					inotifyCh <- inotifyEv{name: name, mask: event.Mask}
+				}
+				offset += unix.SizeofInotifyEvent + nameLen
+			}
+		}
+	}()
+
 	for {
 		select {
+		case <-ctx.Done():
+			return // defer закроет fd → горутина выйдет
 		case name := <-kbdLost:
 			delete(keyboards, name)
-		default:
-			for devicePath, device := range getInputDevices() {
+		case ie, ok := <-inotifyCh:
+			if !ok {
+				return
+			}
+			if !strings.HasPrefix(ie.name, "event") {
+				continue
+			}
+			devicePath := "/dev/input/" + ie.name
+			switch {
+			case ie.mask&(unix.IN_CREATE|unix.IN_MOVED_TO) != 0:
+				time.Sleep(100 * time.Millisecond) // ждём готовности устройства
+				device, err := evdev.Open(devicePath)
+				if err != nil {
+					continue
+				}
 				if isKeyboard(device) {
 					if _, ok := keyboards[devicePath]; !ok {
 						log.Printf("Клавиатура: %s (%s)", device.Name, devicePath)
 						keyboards[devicePath] = device
-						go listenEvents(devicePath, device, inbox, kbdLost)
+						go listenEvents(ctx, devicePath, device, inbox, kbdLost)
 					}
 				} else {
 					device.File.Close()
 				}
+			case ie.mask&unix.IN_DELETE != 0:
+				delete(keyboards, devicePath)
 			}
-			if scanOnce {
-				return
-			}
-			time.Sleep(scanPeriod)
 		}
 	}
 }
 
-func listenEvents(name string, kbd *evdev.InputDevice, replyTo chan message, kbdLost chan string) {
+func listenEvents(ctx context.Context, name string, kbd *evdev.InputDevice, replyTo chan message, kbdLost chan string) {
+	// При отмене контекста закрываем файл устройства → kbd.Read() вернёт ошибку
+	go func() {
+		<-ctx.Done()
+		kbd.File.Close()
+	}()
+
 	for {
 		events, err := kbd.Read()
 		if err != nil || len(events) == 0 {
-			log.Printf("Клавиатура %s отключена", kbd.Name)
-			kbdLost <- name
+			select {
+			case <-ctx.Done():
+				// Нормальное завершение
+			default:
+				log.Printf("Клавиатура %s отключена", kbd.Name)
+				kbdLost <- name
+			}
 			return
 		}
-		replyTo <- message{Device: kbd, Events: events}
+		select {
+		case replyTo <- message{Device: kbd, Events: events}:
+		case <-ctx.Done():
+			return
+		}
 	}
 }
 
@@ -264,25 +369,30 @@ func valueName(v int32) string {
 	}
 }
 
-func listenKeyboards(leftCode, rightCode uint16, printMode bool) {
+func listenKeyboards(ctx context.Context, leftCode, rightCode uint16, printMode bool) {
 	inbox := make(chan message, 8)
 
-	go scanDevices(inbox, false)
-	go listenX11Record(inbox)
+	go watchDevices(ctx, inbox)
+	go listenX11Record(ctx, inbox)
 
 	var useGroup int
 	var prevKey evdev.InputEvent
 	var prevKeyTime time.Time
-	dupWindow := 50 * time.Millisecond
 
-	for msg := range inbox {
+	for {
+		var msg message
+		select {
+		case <-ctx.Done():
+			return
+		case msg = <-inbox:
+		}
 		for _, ev := range msg.Events {
 			if ev.Type != evdev.EV_KEY {
 				continue
 			}
 			// Skip duplicates (same key+state from evdev and X11)
 			now := time.Now()
-			if prevKey.Code == ev.Code && prevKey.Value == ev.Value && now.Sub(prevKeyTime) < dupWindow {
+			if prevKey.Code == ev.Code && prevKey.Value == ev.Value && now.Sub(prevKeyTime) < debounceMs*time.Millisecond {
 				continue
 			}
 			prevKey = ev
@@ -381,7 +491,7 @@ func startBackground() {
 	}
 }
 
-func startConsole() {
+func startConsole(ctx context.Context) {
 	// Определяем коды клавиш
 	leftCode, err := getKeyCode("LEFTCTRL")
 	if err != nil {
@@ -409,7 +519,7 @@ func startConsole() {
 	fmt.Println("Правый Ctrl -> Русский")
 	fmt.Println("Для остановки нажмите Ctrl+C")
 
-	listenKeyboards(leftCode, rightCode, true)
+	listenKeyboards(ctx, leftCode, rightCode, true)
 }
 
 func printUsage() {

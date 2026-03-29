@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	_ "embed"
 	"fmt"
 	"os"
@@ -24,6 +25,8 @@ const (
 	FreqRu       = 523  // C5 (До)
 	FreqEn       = 1046 // C6 (До на октаву выше)
 	BeepDuration = 100 * time.Millisecond
+	Description  = "EnRu Keyboard Layout Switcher"
+	debounceMs   = 150
 )
 
 var (
@@ -92,7 +95,9 @@ func main() {
 			return
 		case "console":
 			stopTask()
-			startConsole()
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			startConsole(ctx)
 		}
 	}
 

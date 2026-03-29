@@ -3,6 +3,7 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"os/exec"
@@ -23,6 +24,7 @@ const (
 	WM_KEYUP                  = 0x0101
 	WM_INPUTLANGCHANGEREQUEST = 0x0050
 	WM_INPUTLANGCHANGE        = 0x0051
+	WM_QUIT                   = 0x0012
 	VK_LCONTROL               = 0xA2
 	VK_RCONTROL               = 0xA3
 
@@ -30,10 +32,8 @@ const (
 
 	GW_HWNDPREV   = 3
 	GW_HWNDPARENT = 4
-	Description   = "EnRu Keyboard Layout Switcher"
 	En            = "00000409"
 	Ru            = "00000419"
-	debounceMs    = 150 // в миллисекундах
 )
 
 var (
@@ -153,7 +153,13 @@ func unhook() {
 	}
 }
 
-func messageLoop() {
+func messageLoop(ctx context.Context) {
+	// При отмене контекста отправляем WM_QUIT для выхода из GetMessage
+	go func() {
+		<-ctx.Done()
+		procPostMessage.Call(0, WM_QUIT, 0, 0)
+	}()
+
 	var msg MSG
 	for {
 		// Блокирующее ожидание сообщений
@@ -394,7 +400,7 @@ func startBackground() {
 	}
 }
 
-func startConsole() {
+func startConsole(ctx context.Context) {
 	if err := setHook(); err != nil {
 		fmt.Println(err)
 		os.Exit(1)
@@ -404,7 +410,7 @@ func startConsole() {
 	fmt.Println("Левый Ctrl -> Английский")
 	fmt.Println("Правый Ctrl -> Русский")
 	fmt.Println("Для остановки нажмите Ctrl+C")
-	messageLoop()
+	messageLoop(ctx)
 }
 
 func printUsage() {
