@@ -13,7 +13,7 @@ WSLPATH = $(shell wslpath -u "$(WINDOWS_GOPATH)")
 WIN7 := go1.21.4
 
 INSTALL := install -ldflags="-s -w"
-BUILD := build -ldflags="-s -w -extldflags=-static"
+BUILD := build -ldflags="-s -w"
 
 
 ifeq ($(GOEXE),.exe)
@@ -49,14 +49,14 @@ ls:
 wsl:
 	GOOS=windows \
 	CGO_ENABLED=0 \
-	go $(BUILD)
+	go $(BUILD)&& \
 	cp "$(PROGRAM_NAME).exe" "$(WSLPATH)/bin/"
 
 wslc:
 	GOOS=windows \
 	CGO_ENABLED=1 \
 	CC=x86_64-w64-mingw32-gcc \
-	go $(BUILD)
+	go $(BUILD)&& \
 	cp "$(PROGRAM_NAME).exe" "$(WSLPATH)/bin/"
 
 wsl7:
@@ -64,7 +64,7 @@ wsl7:
 	GOARCH=386 \
 	CGO_ENABLED=0 \
 	$(WIN7) $(BUILD) \
-	-o "$(PROGRAM_NAME)-win7.exe"
+	-o "$(PROGRAM_NAME)-win7.exe"&& \
 	cp "$(PROGRAM_NAME)-win7.exe" "$(WSLPATH)/bin/"
 
 wslc7:
@@ -73,19 +73,20 @@ wslc7:
 	CGO_ENABLED=1 \
 	CC=i686-w64-mingw32-gcc \
 	$(WIN7) $(BUILD) \
-	-o "$(PROGRAM_NAME)-win7.exe"
+	-o "$(PROGRAM_NAME)-win7.exe"&& \
 	cp "$(PROGRAM_NAME)-win7.exe" "$(WSLPATH)/bin/"
 
 win7:
-ifeq ($(GOEXE),.exe)
-	set GOARCH=386&& \
-	$(WIN7) $(BUILD) -o "$(PROGRAM_NAME)-win7.exe"
-else
 	GOOS=windows GOARCH=386 $(WIN7) $(BUILD) -o "$(PROGRAM_NAME)-win7.exe"
-endif
 
 win:
 	GOOS=windows go $(BUILD)
+
+linux:
+	GOOS=linux go $(BUILD)
+
+iwin:
+	GOOS=windows go $(INSTALL)
 
 igo7:
 	go install golang.org/dl/$(WIN7)@latest&& \
@@ -119,3 +120,26 @@ ifeq ($(GOEXE),.exe)
 else
 	sudo apt install git
 endif
+
+iCGOalt:
+	su - -c "apt-get update && \
+		apt-get install -y \
+		libX11-devel \
+		libXtst-devel \
+		libXext-devel \
+		pkg-config \
+		gcc \
+		make \
+		git"
+
+iCGOdeb:
+	sudo apt-get update
+	sudo apt-get install -y \
+		build-essential \
+		libx11-dev \
+		libxtst-dev \
+		libxext-dev \
+		x11proto-record-dev \
+		pkg-config \
+		gcc \
+		libc6-dev
