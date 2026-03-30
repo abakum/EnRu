@@ -143,3 +143,20 @@ iCGOdeb:
 		pkg-config \
 		gcc \
 		libc6-dev
+
+p10:
+	@echo "=== Сборка в ALT Linux p10 (GLIBC 2.32) ==="
+	@echo "Монтируем корень проекта: $(CURDIR)/../.."
+	@docker run --rm -v $(CURDIR)/../..:/app -w /app \
+		alt:p10 \
+		sh -c "apt-get update && \
+		       apt-get install -y gcc golang libX11-devel libXtst-devel ca-certificates && \
+		       CGO_ENABLED=1 GOOS=linux go build -ldflags='-s -w' -o EnRuP10 ./cmd/EnRu && \
+		       echo '✅ Сборка завершена' && \
+		       echo '' && \
+		       echo 'Зависимости:' && \
+		       ldd EnRuP10 && \
+		       echo '' && \
+		       echo 'Версии GLIBC:' && \
+		       strings EnRuP10 | grep 'GLIBC_' | sort -u"
+	@echo "✓ Бинарник: $(CURDIR)/../.. /EnRuP10"
