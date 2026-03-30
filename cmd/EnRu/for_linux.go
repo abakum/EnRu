@@ -144,8 +144,58 @@ func generateWAVFile(freq uint, durationMs int) (string, error) {
 	return tmpFile.Name(), nil
 }
 
-// switchLayout переключает раскладку через KDE D-Bus
+// switchMethod хранит имя метода переключения для логирования
+var switchMethod string
+
+// switchLayoutFunc кэширует рабочий метод переключения после первого успеха
+var switchLayoutFunc func(uint) error
+
+// switchLayout переключает раскладку, пробуя несколько методов:
+// 1) KDE D-Bus  2) GNOME Shell  3) IBus engine  4) setxkbmap (X11)
+// После первого успеха кэширует рабочий метод
 func switchLayout(group uint) error {
+	// Если метод уже определён — используем его
+	if switchLayoutFunc != nil {
+		return switchLayoutFunc(group)
+	}
+
+	// Метод 1: KDE D-Bus
+	if err := switchLayoutKDE(group); err == nil {
+		switchMethod = "KDE"
+		switchLayoutFunc = switchLayoutKDE
+		log.Printf("Метод переключения: %s", switchMethod)
+		return nil
+	}
+
+	// Метод 2: GNOME Shell Eval (D-Bus)
+	if err := switchLayoutGNOME(group); err == nil {
+		switchMethod = "GNOME"
+		switchLayoutFunc = switchLayoutGNOME
+		log.Printf("Метод переключения: %s", switchMethod)
+		return nil
+	}
+
+	// Метод 3: IBus engine
+	if err := switchLayoutIBus(group); err == nil {
+		switchMethod = "IBus"
+		switchLayoutFunc = switchLayoutIBus
+		log.Printf("Метод переключения: %s", switchMethod)
+		return nil
+	}
+
+	// Метод 4: setxkbmap (X11)
+	if err := switchLayoutSetxkbmap(group); err == nil {
+		switchMethod = "setxkbmap"
+		switchLayoutFunc = switchLayoutSetxkbmap
+		log.Printf("Метод переключения: %s", switchMethod)
+		return nil
+	}
+
+	return fmt.Errorf("все методы не сработали (KDE, GNOME, IBus, setxkbmap)")
+}
+
+// switchLayoutKDE переключает раскладку через KDE D-Bus
+func switchLayoutKDE(group uint) error {
 	conn, err := dbus.ConnectSessionBus()
 	if err != nil {
 		return fmt.Errorf("D-Bus connect: %v", err)
@@ -156,6 +206,69 @@ func switchLayout(group uint) error {
 	call := obj.Call("org.kde.KeyboardLayouts.setLayout", 0, group)
 	if call.Err != nil {
 		return fmt.Errorf("D-Bus setLayout(%d): %v", group, call.Err)
+	}
+	return nil
+}
+
+// switchLayoutGNOME переключает раскладку через GNOME Shell D-Bus Eval
+// Работает на GNOME (X11 и Wayland), обновляет индикатор раскладок
+func switchLayoutGNOME(group uint) error {
+	conn, err := dbus.ConnectSessionBus()
+	if err != nil {
+		return fmt.Errorf("GNOME D-Bus connect: %v", err)
+	}
+	defer conn.Close()
+
+	// JavaScript для переключения InputSource в GNOME Shell
+	js := fmt.Sprintf(
+		"imports.ui.status.keyboard.getInputSourceManager().inputSources[%d].activate()",
+		group)
+
+	obj := conn.Object("org.gnome.Shell", "/org/gnome/Shell")
+	call := obj.Call("org.gnome.Shell.Eval", 0, js)
+	if call.Err != nil {
+		return fmt.Errorf("GNOME Shell.Eval: %v", call.Err)
+	}
+
+	// Shell.Eval возвращает (success bool, result string)
+	if len(call.Body) < 1 {
+		return fmt.Errorf("GNOME Shell.Eval: пустой ответ")
+	}
+	success := call.Body[0].(bool)
+	if !success {
+		return fmt.Errorf("GNOME Shell.Eval: вернул false (возможно unsafe-mode выключен)")
+	}
+	return nil
+}
+
+// switchLayoutIBus переключает раскладку через ibus engine (внешняя команда)
+func switchLayoutIBus(group uint) error {
+	var engineName string
+	switch group {
+	case 0:
+		engineName = "xkb:us::eng"
+	case 1:
+		engineName = "xkb:ru::rus"
+	default:
+		engineName = "xkb:us::eng"
+	}
+	cmd := exec.Command("ibus", "engine", engineName)
+	if err := cmd.Run(); err != nil {
+		return fmt.Errorf("ibus engine %s: %v", engineName, err)
+	}
+	return nil
+}
+
+// switchLayoutSetxkbmap переключает раскладку через setxkbmap (X11)
+// Работает даже при активном IBus, т.к. меняет конфигурацию XKB на уровне X-сервера
+func switchLayoutSetxkbmap(group uint) error {
+	layout := "us"
+	if group == 1 {
+		layout = "ru"
+	}
+	cmd := exec.Command("setxkbmap", "-layout", layout)
+	if err := cmd.Run(); err != nil {
+		return fmt.Errorf("setxkbmap -layout %s: %v", layout, err)
 	}
 	return nil
 }
