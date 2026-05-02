@@ -132,6 +132,17 @@ iCGOalt:
 		make \
 		git"
 
+iCGOalts:
+	sudo apt-get update
+	sudo apt-get install -y \
+		libX11-devel \
+		libXtst-devel \
+		libXext-devel \
+		pkg-config \
+		gcc \
+		make \
+		git
+
 iCGOdeb:
 	sudo apt-get update
 	sudo apt-get install -y \
