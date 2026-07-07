@@ -13,6 +13,17 @@ Another global keyboard layout switch by clicking the left or right `Ctrl` key<b
 - [download](https://github.com/AutoHotkey/AutoHotkey/releases) & install [AutoHotkey](https://github.com/AutoHotkey/AutoHotkey/releases)![ahk](ahk.png)
 - run `EnRu.ahk` or `a2e.bat`
 
+### macOS
+- install [Go](https://go.dev/dl/) and Xcode Command Line Tools (`xcode-select --install`)
+- add both input sources `U.S.` and `Russian` in System Settings → Keyboard → Input Sources
+- build **on macOS**: `make darwin` (produces `EnRu-darwin`; cgo requires Apple frameworks, cannot cross-build from Linux/Windows)
+- run `./EnRu-darwin start`
+- grant **Accessibility** permission: System Settings → Privacy & Security → Accessibility (add `EnRu-darwin` / your Terminal), then restart the program
+- autostart: `./EnRu-darwin install` (creates `~/Library/LaunchAgents/github.abakum.EnRu.plist`)
+
+> Note: macOS layout switching uses a private Text Input Source API (`TISetCurrentKeyboardLayoutInputSource`) and a global keyboard `CGEventTap`, which require Accessibility permission. A future macOS update may remove the private symbol.
+> Примечание: переключение раскладки на macOS использует приватный Text Input Source API (`TISetCurrentKeyboardLayoutInputSource`) и глобальный клавиатурный `CGEventTap`, для чего нужно разрешение Accessibility. Будущее обновление macOS может убрать приватный символ.
+
 ## Usage - использование:
 - Press and release the left `Ctrl` key to switch the keyboard layout to `en_US`![en_US](1.ico).<br>
 Нажми и отпусти левую клавишу `Ctrl` чтоб переключить раскладку клавиатуры на `en_US`![en_US](1.ico).
