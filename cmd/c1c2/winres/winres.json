@@ -1,0 +1,48 @@
+{
+  "RT_GROUP_ICON": {
+    "#1": {
+      "0000": [
+        "../../EnRu/winres/256x256.png",
+        "../../EnRu/winres/96x96.png",
+        "../../EnRu/winres/64x64.png",
+        "../../EnRu/winres/48x48.png",
+        "../../EnRu/winres/40x40.png",
+        "../../EnRu/winres/32x32.png",
+        "../../EnRu/winres/24x24.png",
+        "../../EnRu/winres/20x20.png",
+        "../../EnRu/winres/16x16.png"
+      ]
+    }
+  },
+  "RT_MANIFEST": {
+    "#1": {
+      "0409": {
+        "minimum-os": "win7",
+        "execution-level": "highest available",
+        "dpi-awareness": "system"
+      }
+    }
+  },
+  "RT_VERSION": {
+    "#1": {
+      "0000": {
+        "fixed": {
+          "file_version": "0.7.6.0",
+          "product_version": "0.7.6.0"
+        },
+        "info": {
+          "0409": {
+            "CompanyName": "Abakum",
+            "FileDescription": "Keyboard layout switcher using Windows hotkeys",
+            "FileVersion": "0.7.6",
+            "InternalName": "c1c2",
+            "LegalCopyright": "Copyright Abakum",
+            "OriginalFilename": "c1c2.exe",
+            "ProductName": "c1c2",
+            "ProductVersion": "0.7.6"
+          }
+        }
+      }
+    }
+  }
+}
