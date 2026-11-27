@@ -15,7 +15,8 @@ import (
 	"unsafe"
 
 	version "github.com/abakum/version/lib"
-	"github.com/jxeng/shortcut"
+	"github.com/go-ole/go-ole"
+	"github.com/go-ole/go-ole/oleutil"
 	ps "github.com/mitchellh/go-ps"
 	"golang.org/x/sys/windows"
 )
@@ -35,7 +36,8 @@ func main() {
 	err := run(args)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
-		if len(args) > 0 && (args[0] == "install" || args[0] == "uninstall") {
+		var settingsErr hotkeySettingsError
+		if errors.As(err, &settingsErr) {
 			printManualSetup(args[0] == "install")
 		}
 	}
@@ -46,6 +48,8 @@ func main() {
 		os.Exit(1)
 	}
 }
+
+type hotkeySettingsError struct{ error }
 
 func pauseConsole() {
 	input, err := windows.GetStdHandle(windows.STD_INPUT_HANDLE)
@@ -97,15 +101,15 @@ func run(args []string) error {
 		defer printSavedDirectHotkeys("After")
 		applyHotkeySettings, err = prepareHotkeys(command == "install")
 		if err != nil {
-			return fmt.Errorf("cannot prepare layout shortcuts: %w", err)
+			return hotkeySettingsError{fmt.Errorf("cannot prepare layout shortcuts: %w", err)}
 		}
 	}
 	if command == "install" {
 		if err := applyHotkeySettings(); err != nil {
-			return fmt.Errorf("cannot install layout shortcuts: %w", err)
+			return hotkeySettingsError{fmt.Errorf("cannot install layout shortcuts: %w", err)}
 		}
 		if err := configureAutostart(exe, true); err != nil {
-			return fmt.Errorf("layout shortcuts are already applied, but Startup setup failed: %w", err)
+			fmt.Fprintf(os.Stderr, "Warning: Startup setup failed; continuing with background launch: %v\n", err)
 		}
 	}
 	if err := stopTask(filepath.Base(exe)); err != nil {
@@ -120,7 +124,7 @@ func run(args []string) error {
 			return err
 		}
 		if err := applyHotkeySettings(); err != nil {
-			return fmt.Errorf("c1c2 stopped and Startup shortcut removed, but shortcut cleanup failed: %w", err)
+			return hotkeySettingsError{fmt.Errorf("c1c2 stopped and Startup shortcut removed, but shortcut cleanup failed: %w", err)}
 		}
 		return openHotkeySettings("Uninstall")
 	case "stop":
@@ -191,22 +195,21 @@ func stopTask(name string) error {
 }
 
 func configureAutostart(exe string, install bool) error {
-	dir := os.Getenv("APPDATA")
-	if dir == "" {
-		return fmt.Errorf("cannot locate the Startup folder: APPDATA is not set")
-	}
-	path := filepath.Join(dir, "Microsoft", "Windows", "Start Menu", "Programs", "Startup", "c1c2.lnk")
+	var flags uint32
 	if install {
-		sc := shortcut.Shortcut{
-			ShortcutPath: path,
-			Target:       exe,
-			Arguments:    "--startup",
-			Description:  description,
-			IconLocation: exe,
-			WindowStyle:  "7",
+		flags = windows.KF_FLAG_CREATE
+	}
+	dir, err := windows.KnownFolderPath(windows.FOLDERID_Startup, flags)
+	if err != nil {
+		if !install && (errors.Is(err, windows.ERROR_FILE_NOT_FOUND) || errors.Is(err, windows.ERROR_PATH_NOT_FOUND)) {
+			return nil
 		}
-		if err := shortcut.Create(sc); err != nil {
-			return fmt.Errorf("cannot create Startup shortcut: %w", err)
+		return fmt.Errorf("cannot locate the Startup folder: %w", err)
+	}
+	path := filepath.Join(dir, "c1c2.lnk")
+	if install {
+		if err := createStartupShortcut(path, exe); err != nil {
+			return fmt.Errorf("cannot create Startup shortcut %q: %w", path, err)
 		}
 		fmt.Printf("Installed Startup shortcut: %s\n", path)
 		return nil
@@ -216,6 +219,72 @@ func configureAutostart(exe string, install bool) error {
 	}
 	fmt.Printf("Startup shortcut removed: %s\n", path)
 	return nil
+}
+
+func createStartupShortcut(path, exe string) error {
+	// COM initialization and the shortcut objects belong to this OS thread.
+	runtime.LockOSThread()
+	defer runtime.UnlockOSThread()
+	if err := ole.CoInitializeEx(0, ole.COINIT_APARTMENTTHREADED); err != nil {
+		var status *ole.OleError
+		if !errors.As(err, &status) || status.Code() != 1 { // S_FALSE also requires CoUninitialize.
+			return shortcutError("CoInitializeEx", err)
+		}
+	}
+	defer ole.CoUninitialize()
+	object, err := oleutil.CreateObject("WScript.Shell")
+	if err != nil {
+		return shortcutError("create WScript.Shell", err)
+	}
+	defer object.Release()
+	shell, err := object.QueryInterface(ole.IID_IDispatch)
+	if err != nil {
+		return shortcutError("query WScript.Shell IDispatch", err)
+	}
+	defer shell.Release()
+	result, err := oleutil.CallMethod(shell, "CreateShortcut", path)
+	if err != nil {
+		return shortcutError("CreateShortcut", err)
+	}
+	defer result.Clear()
+	link := result.ToIDispatch()
+	if link == nil {
+		return errors.New("CreateShortcut returned no shortcut object")
+	}
+	for _, property := range []struct {
+		name  string
+		value any
+	}{
+		{"TargetPath", exe}, {"Arguments", "--startup"}, {"Description", description},
+		{"IconLocation", exe + ",0"}, {"WindowStyle", int32(7)},
+	} {
+		value, err := oleutil.PutProperty(link, property.name, property.value)
+		if err != nil {
+			return shortcutError("set "+property.name, err)
+		}
+		_ = value.Clear()
+	}
+	saved, err := oleutil.CallMethod(link, "Save")
+	if err != nil {
+		return shortcutError("Save", err)
+	}
+	_ = saved.Clear()
+	info, err := os.Stat(path)
+	if err != nil {
+		return fmt.Errorf("Save returned success, but the shortcut could not be verified: %w", err)
+	}
+	if !info.Mode().IsRegular() || info.Size() == 0 {
+		return errors.New("Save returned success, but the shortcut is not a nonempty file")
+	}
+	return nil
+}
+
+func shortcutError(operation string, err error) error {
+	var status *ole.OleError
+	if errors.As(err, &status) {
+		return fmt.Errorf("%s (HRESULT 0x%08X): %w", operation, uint32(status.Code()), err)
+	}
+	return fmt.Errorf("%s: %w", operation, err)
 }
 
 func printManualSetup(install bool) {
