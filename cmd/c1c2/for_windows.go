@@ -26,13 +26,14 @@ const (
 	vkLeftCtrl   = 0xA2
 	vkRightCtrl  = 0xA3
 
-	inputKeyboard = 1
-	keyEventKeyUp = 2
-	injected      = 0x10
-	inputTag      = 0x43314332
-	gaRootOwner   = 3
-	debounce      = 150 * time.Millisecond
-	beepDuration  = 100 * time.Millisecond
+	inputKeyboard       = 1
+	keyEventKeyUp       = 2
+	keyEventExtendedKey = 1
+	injected            = 0x10
+	inputTag            = 0x43314332
+	gaRootOwner         = 3
+	debounce            = 150 * time.Millisecond
+	beepDuration        = 100 * time.Millisecond
 )
 
 var (
@@ -43,8 +44,9 @@ var (
 	getMessage          = user32.NewProc("GetMessageW")
 	getForegroundWindow = user32.NewProc("GetForegroundWindow")
 	getClassName        = user32.NewProc("GetClassNameW")
+	getWindowThreadPID  = user32.NewProc("GetWindowThreadProcessId")
 	getAncestor         = user32.NewProc("GetAncestor")
-	findWindow          = user32.NewProc("FindWindowW")
+	getWindow           = user32.NewProc("GetWindow")
 	setForegroundWindow = user32.NewProc("SetForegroundWindow")
 	getAsyncKeyState    = user32.NewProc("GetAsyncKeyState")
 	sendInput           = user32.NewProc("SendInput")
@@ -89,8 +91,8 @@ type keyboardInput struct {
 }
 
 type switchRequest struct {
-	window uintptr
-	digit  uint16
+	window, foreground uintptr
+	digit              uint16
 }
 
 func windowClass(window uintptr) string {
@@ -101,6 +103,10 @@ func windowClass(window uintptr) string {
 
 func foregroundTarget() uintptr {
 	window, _, _ := getForegroundWindow.Call()
+	return foregroundOwner(window)
+}
+
+func foregroundOwner(window uintptr) uintptr {
 	if window != 0 && windowClass(window) == "tooltips_class32" {
 		// Releasing Ctrl can dismiss the tooltip and restore its owner's foreground window.
 		if owner, _, _ := getAncestor.Call(window, gaRootOwner); owner != 0 {
@@ -114,26 +120,93 @@ func isTaskbar(class string) bool {
 	return class == "Shell_TrayWnd" || class == "Shell_SecondaryTrayWnd" || class == "tooltips_class32"
 }
 
-func activateDesktop(taskbar uintptr) bool {
-	class, _ := windows.UTF16PtrFromString("Progman")
-	desktop, _, _ := findWindow.Call(uintptr(unsafe.Pointer(class)), 0)
-	if desktop == 0 || foregroundTarget() != taskbar {
-		return false
-	}
-	if ok, _, _ := setForegroundWindow.Call(desktop); ok == 0 {
-		return false
-	}
-	deadline := time.Now().Add(40 * time.Millisecond)
-	for {
-		foreground, _, _ := getForegroundWindow.Call()
-		if foreground == desktop {
-			return true
+func checkDirectHotkey(digit uint16) error {
+	var target uintptr
+	if immGetHotkey.Find() == nil {
+		for id := uintptr(firstDirect); id <= lastDirect; id++ {
+			var modifiers, key uint32
+			var hkl uintptr
+			ok, _, _ := immGetHotkey.Call(id, uintptr(unsafe.Pointer(&modifiers)), uintptr(unsafe.Pointer(&key)), uintptr(unsafe.Pointer(&hkl)))
+			if ok != 0 && modifiers == ctrlDigits && key == uint32(digit) && hkl != 0 {
+				if target != 0 && target != hkl {
+					return fmt.Errorf("Ctrl+%c has conflicting targets", digit)
+				}
+				target = hkl
+			}
 		}
-		if (foreground != 0 && foregroundTarget() != taskbar) || !time.Now().Before(deadline) {
-			return false
-		}
-		time.Sleep(time.Millisecond)
 	}
+	if target == 0 {
+		return fmt.Errorf("cannot resolve the Windows binding for Ctrl+%c", digit)
+	}
+	return nil
+}
+
+func switchTaskbar(window uintptr, digit uint16, input *[4]keyboardInput) {
+	if err := checkDirectHotkey(digit); err != nil {
+		fmt.Printf("Skipped taskbar layout change: %v.\n", err)
+		return
+	}
+	const gwHwndPrev = 3
+	if active, _, _ := getForegroundWindow.Call(); active != window {
+		fmt.Println("Skipped taskbar layout change: the foreground window changed.")
+		return
+	}
+	start := window
+	var shellPID uint32
+	if tid, _, _ := getWindowThreadPID.Call(start, uintptr(unsafe.Pointer(&shellPID))); tid == 0 || shellPID == 0 {
+		fmt.Println("Skipped taskbar layout change: cannot identify the foreground process.")
+		return
+	}
+	visited := make(map[uintptr]bool)
+	for window != 0 && !visited[window] && len(visited) < 32 {
+		visited[window] = true
+		if windowClass(window) == "tooltips_class32" {
+			var pid uint32
+			tid, _, _ := getWindowThreadPID.Call(window, uintptr(unsafe.Pointer(&pid)))
+			if tid == 0 || pid != shellPID {
+				window, _, _ = getWindow.Call(window, gwHwndPrev)
+				continue
+			}
+			if active, _, _ := getForegroundWindow.Call(); active != start {
+				fmt.Println("Skipped taskbar layout change: the foreground window changed during the search.")
+				return
+			}
+			if window != start {
+				ok, _, _ := setForegroundWindow.Call(window)
+				fmt.Printf("Taskbar route: activation of tooltips_class32 (0x%X) returned %t.\n", window, ok != 0)
+			}
+			deadline := time.Now().Add(40 * time.Millisecond)
+			for {
+				active, _, _ := getForegroundWindow.Call()
+				if active == window {
+					break
+				}
+				if (active != start && active != 0) || !time.Now().Before(deadline) {
+					fmt.Println("Skipped taskbar layout change: tooltip activation was not confirmed.")
+					return
+				}
+				time.Sleep(time.Millisecond)
+			}
+			for _, key := range [...]uintptr{vkControl, vkShift, vkMenu, vkLeftWin, vkRightWin, uintptr(digit)} {
+				if state, _, _ := getAsyncKeyState.Call(key); state&0x8000 != 0 {
+					fmt.Printf("Skipped taskbar layout change: virtual key 0x%X is held.\n", key)
+					return
+				}
+			}
+			if active, _, _ := getForegroundWindow.Call(); active != window {
+				fmt.Println("Skipped taskbar layout change: the tooltip lost focus.")
+				return
+			}
+			if sent, _, err := sendInput.Call(uintptr(len(input)), uintptr(unsafe.Pointer(&input[0])), unsafe.Sizeof(input[0])); sent != uintptr(len(input)) {
+				fmt.Printf("Taskbar route: SendInput Ctrl+%c (%d/%d): %v\n", digit, sent, len(input), err)
+				return
+			}
+			fmt.Printf("Taskbar route: sent Ctrl+%c with tooltips_class32 (0x%X) active.\n", digit, window)
+			return
+		}
+		window, _, _ = getWindow.Call(window, gwHwndPrev)
+	}
+	fmt.Println("Skipped taskbar layout change: no tooltips_class32 window from the foreground process in the Z-order search.")
 }
 
 func traceHook(message string) {
@@ -190,14 +263,15 @@ func keyboardHook(code int, wParam, lParam uintptr) uintptr {
 				traceHook("Skipped: repeated Ctrl tap within the debounce interval.")
 				return result
 			}
-			window := foregroundTarget()
+			foreground, _, _ := getForegroundWindow.Call()
+			window := foregroundOwner(foreground)
 			if window != 0 {
 				digit := uint16('1')
 				if bit == 2 {
 					digit = '2'
 				}
 				select {
-				case requests <- switchRequest{window, digit}:
+				case requests <- switchRequest{window: window, foreground: foreground, digit: digit}:
 					lastCtrl, lastSwitch = event.VK, now
 				default:
 					traceHook("Skipped: switch request queue is full.")
@@ -215,12 +289,19 @@ func switchLayout(req switchRequest, console bool) {
 		fmt.Printf("Standalone Ctrl tap: Ctrl+%c requested for %q (0x%X).\n", req.digit, windowClass(req.window), req.window)
 	}
 	var input [4]keyboardInput
-	for i, key := range [...]uint16{vkLeftCtrl, req.digit, req.digit, vkLeftCtrl} {
+	ctrl := uint16(vkLeftCtrl)
+	if req.digit == '2' {
+		ctrl = vkRightCtrl
+	}
+	for i, key := range [...]uint16{ctrl, req.digit, req.digit, ctrl} {
 		input[i].Type = inputKeyboard
 		input[i].Key.VK = key
 		input[i].Key.ExtraInfo = inputTag
 		if i >= 2 {
 			input[i].Key.Flags = keyEventKeyUp
+		}
+		if key == vkRightCtrl {
+			input[i].Key.Flags |= keyEventExtendedKey
 		}
 	}
 	// Windows updates the async key state after the low-level hook returns.
@@ -251,8 +332,11 @@ func switchLayout(req switchRequest, console bool) {
 		}
 		return
 	}
-	if isTaskbar(windowClass(req.window)) && !activateDesktop(req.window) {
-		fmt.Println("Skipped layout change: could not activate the Progman desktop from the taskbar.")
+	if isTaskbar(windowClass(req.window)) || windowClass(req.foreground) == "tooltips_class32" {
+		active, _, _ := getForegroundWindow.Call()
+		if active == req.foreground || active == req.window {
+			switchTaskbar(active, req.digit, &input)
+		}
 		return
 	}
 	sent, _, err := sendInput.Call(uintptr(len(input)), uintptr(unsafe.Pointer(&input[0])), unsafe.Sizeof(input[0]))

@@ -3,7 +3,6 @@
 package main
 
 import (
-	"context"
 	"fmt"
 	"os"
 	"os/exec"
@@ -21,23 +20,14 @@ import (
 
 const (
 	WH_KEYBOARD_LL            = 13
-	WM_KEYUP                  = 0x0101
 	WM_INPUTLANGCHANGEREQUEST = 0x0050
-	WM_INPUTLANGCHANGE        = 0x0051
-	WM_QUIT                   = 0x0012
-	VK_LCONTROL               = 0xA2
-	VK_RCONTROL               = 0xA3
-
-	KEYEVENTF_KEYUP = 0x0002
-
-	GW_HWNDPREV   = 3
-	GW_HWNDPARENT = 4
-	En            = "00000409"
-	Ru            = "00000419"
+	GW_HWNDPREV               = 3
+	wordInputTag              = 0x456E5275
+	llkhfInjected             = 0x10
 )
 
 var (
-	user32                       = windows.NewLazyDLL("user32.dll")
+	user32                       = windows.NewLazySystemDLL("user32.dll")
 	procSetWindowsHookEx         = user32.NewProc("SetWindowsHookExW")
 	procCallNextHookEx           = user32.NewProc("CallNextHookEx")
 	procUnhookWindowsHookEx      = user32.NewProc("UnhookWindowsHookEx")
@@ -46,20 +36,22 @@ var (
 	procGetMessage               = user32.NewProc("GetMessageW")
 	procTranslateMessage         = user32.NewProc("TranslateMessage")
 	procDispatchMessage          = user32.NewProc("DispatchMessageW")
-	procLoadKeyboardLayout       = user32.NewProc("LoadKeyboardLayoutW")
 	procGetWindow                = user32.NewProc("GetWindow")
 	procSetForegroundWindow      = user32.NewProc("SetForegroundWindow")
 	procGetClassName             = user32.NewProc("GetClassNameW")
 	procGetWindowThreadProcessId = user32.NewProc("GetWindowThreadProcessId")
 	procGetKeyboardLayout        = user32.NewProc("GetKeyboardLayout")
-	procFindWindow               = user32.NewProc("FindWindowW")
+	procSendInput                = user32.NewProc("SendInput")
+	procGetAsyncKeyState         = user32.NewProc("GetAsyncKeyState")
 
 	kernel32 = syscall.NewLazyDLL("kernel32.dll")
 	procBeep = kernel32.NewProc("Beep")
 
-	hook              uintptr
-	lastProcessedKey  uint32
-	lastProcessedTime int64
+	hook        uintptr
+	detector    ctrlDetector
+	switchTo    chan int
+	hookTrace   chan ctrlTrace
+	vncTestMode string // Set only in the two diagnostic builds via -ldflags -X.
 )
 
 type KBDLLHOOKSTRUCT struct {
@@ -70,6 +62,12 @@ type KBDLLHOOKSTRUCT struct {
 	DwExtraInfo uintptr
 }
 
+type ctrlTrace struct {
+	message string
+	event   KBDLLHOOKSTRUCT
+	wm      uintptr
+}
+
 type MSG struct {
 	HWND    uintptr
 	Message uint32
@@ -77,10 +75,21 @@ type MSG struct {
 	LParam  uintptr
 	Time    uint32
 	Pt      POINT
+	Private uint32
 }
 
 type POINT struct {
 	X, Y int32
+}
+
+type keyboardInput struct {
+	Type uint32
+	Key  struct {
+		VK, Scan    uint16
+		Flags, Time uint32
+		ExtraInfo   uintptr
+	}
+	_ [8]byte // The Win32 INPUT union is sized for MOUSEINPUT.
 }
 
 // Abs возвращает абсолютный путь, приводя букву диска к нижнему регистру (только для Windows).
@@ -111,8 +120,7 @@ func resolveExe() string {
 		} else if abs, err := Abs(os.Args[0]); err == nil {
 			return abs
 		}
-		fmt.Println(err)
-		os.Exit(1)
+		return ""
 	}
 	return exe
 }
@@ -153,25 +161,22 @@ func unhook() {
 	}
 }
 
-func messageLoop(ctx context.Context) {
-	// При отмене контекста отправляем WM_QUIT для выхода из GetMessage
-	go func() {
-		<-ctx.Done()
-		procPostMessage.Call(0, WM_QUIT, 0, 0)
-	}()
-
+func messageLoop() error {
 	var msg MSG
 	for {
 		// Блокирующее ожидание сообщений
-		ret, _, _ := procGetMessage.Call(
+		ret, _, err := procGetMessage.Call(
 			uintptr(unsafe.Pointer(&msg)),
 			0,
 			0,
 			0,
 		)
 
-		if ret == 0 { // WM_QUIT
-			break
+		switch int32(ret) {
+		case 0:
+			return nil
+		case -1:
+			return fmt.Errorf("GetMessageW: %w", err)
 		}
 
 		procTranslateMessage.Call(uintptr(unsafe.Pointer(&msg)))
@@ -181,51 +186,46 @@ func messageLoop(ctx context.Context) {
 
 func keyboardHook(nCode int, wParam uintptr, lParam uintptr) uintptr {
 	result, _, _ := procCallNextHookEx.Call(0, uintptr(nCode), wParam, lParam)
-
-	if nCode >= 0 && wParam == WM_KEYUP {
-		kb := (*KBDLLHOOKSTRUCT)(unsafe.Pointer(lParam))
-
-		if kb.VkCode == VK_LCONTROL || kb.VkCode == VK_RCONTROL {
-			now := time.Now().UnixNano() / 1e6 // ms
-			last := lastProcessedTime
-
-			if kb.VkCode == lastProcessedKey && (now-last) < debounceMs {
-				return result // Уже обрабатывали недавно
-			}
-
-			// Обновляем время
-			lastProcessedKey = kb.VkCode
-			lastProcessedTime = now
-
-			// Запускаем обработку
-			go func(vkCode uint32) {
-				switch vkCode {
-				case VK_LCONTROL:
-					playBeep(FreqEn)
-					switchLanguage(En)
-				case VK_RCONTROL:
-					playBeep(FreqRu)
-					switchLanguage(Ru)
-				}
-			}(kb.VkCode)
+	if nCode != 0 {
+		return result
+	}
+	kb := (*KBDLLHOOKSTRUCT)(unsafe.Pointer(lParam))
+	if hookTrace != nil && (kb.VkCode == vkLeftCtrl || kb.VkCode == vkRightCtrl || kb.VkCode == 0x11) {
+		queueCtrlTrace(ctrlTrace{event: *kb, wm: wParam})
+	}
+	if kb.Flags&llkhfInjected != 0 && kb.DwExtraInfo == wordInputTag {
+		if kb.VkCode == vkLeftCtrl || kb.VkCode == vkRightCtrl {
+			traceCtrl("Ctrl: собственное событие SendInput пропущено")
+		}
+		return result
+	}
+	index, trace := detector.event(wParam, kb.VkCode, time.Now(), vncTestMode == "release")
+	traceCtrl(trace)
+	if index >= 0 {
+		select {
+		case switchTo <- index:
+			traceCtrl("Ctrl: запрос переключения принят")
+		default:
+			traceCtrl("Ctrl: очередь переключений заполнена")
 		}
 	}
 	return result
 }
 
-func switchLanguage(layoutID string) {
-	// Загружаем раскладку
-	layoutPtr, _ := windows.UTF16PtrFromString(layoutID)
-	hkl, _, err := procLoadKeyboardLayout.Call(
-		uintptr(unsafe.Pointer(layoutPtr)),
-		0,
-	)
-
-	if hkl == 0 {
-		fmt.Printf("LoadKeyboardLayout %s: %v\n", layoutID, err)
-		return
+func traceCtrl(message string) {
+	if message != "" {
+		queueCtrlTrace(ctrlTrace{message: message})
 	}
+}
 
+func queueCtrlTrace(entry ctrlTrace) {
+	select {
+	case hookTrace <- entry:
+	default:
+	}
+}
+
+func switchLanguage(hkl uintptr, layoutID string, digit uint16) {
 	hwnd, _, err := procGetForegroundWindow.Call()
 	if hwnd == 0 {
 		fmt.Printf("GetForegroundWindow: %v\n", err)
@@ -233,21 +233,14 @@ func switchLanguage(layoutID string) {
 	}
 
 	class := getWindowClass(hwnd)
-	once := true
+	if class == "OpusApp" {
+		switchWordLayout(hwnd, hkl, digit)
+		return
+	}
 	// Итерируем через цепочку окон
 	for hwnd != 0 {
-		if class == "OpusApp" && once { // Word великий и ужасный
-			once = false
-			fmt.Printf("Не переключаем %s на: %s\n", class, layoutID)
-			if progman := findProgman(); progman != 0 {
-				procSetForegroundWindow.Call(progman)
-				defer procSetForegroundWindow.Call(hwnd)
-				hwnd = progman
-				class = "Progman"
-				continue
-			} else {
-				return
-			}
+		if getWindowClass(hwnd) == "OpusApp" {
+			return
 		}
 
 		procPostMessage.Call(
@@ -264,7 +257,6 @@ func switchLanguage(layoutID string) {
 			fmt.Printf("Переключили %s на: %s\n", class, layoutID)
 			return
 		}
-
 		// Переходим к предыдущему окну
 		hwnd, _, _ = procGetWindow.Call(hwnd, GW_HWNDPREV)
 
@@ -318,13 +310,56 @@ func getKeyboardLayout(hwnd uintptr) uintptr {
 	return layout
 }
 
-func findProgman() uintptr {
-	className, _ := windows.UTF16PtrFromString("Progman")
-	hwnd, _, _ := procFindWindow.Call(
-		uintptr(unsafe.Pointer(className)),
-		0,
-	)
-	return hwnd
+func switchWordLayout(word, hkl uintptr, digit uint16) {
+	// Do not send an editing shortcut to Word when the system binding is missing or stale.
+	matched := false
+	if immGetHotkey.Find() == nil {
+		for slot := uintptr(firstDirect); slot <= lastDirect; slot++ {
+			var modifiers, key uint32
+			var target uintptr
+			ok, _, _ := immGetHotkey.Call(slot, uintptr(unsafe.Pointer(&modifiers)), uintptr(unsafe.Pointer(&key)), uintptr(unsafe.Pointer(&target)))
+			if ok != 0 && key == uint32(digit) && modifiers == ctrlDigits && target == hkl {
+				matched = true
+				break
+			}
+		}
+	}
+	if !matched {
+		fmt.Printf("Word: Ctrl+%c не назначено на нужную раскладку; выполните EnRu install\n", digit)
+		return
+	}
+	for _, key := range [...]uintptr{0x10, 0x11, 0x12, 0x5B, 0x5C, uintptr(digit)} { // Shift, Ctrl, Alt, Win, digit.
+		if state, _, _ := procGetAsyncKeyState.Call(key); state&0x8000 != 0 {
+			fmt.Printf("Word: Ctrl+%c не отправлено, удерживается клавиша 0x%X\n", digit, key)
+			return
+		}
+	}
+	var input [4]keyboardInput
+	ctrl := uint16(vkLeftCtrl)
+	if digit == '2' {
+		ctrl = vkRightCtrl
+	}
+	for i, key := range [...]uint16{ctrl, digit, digit, ctrl} {
+		input[i].Type = 1 // INPUT_KEYBOARD
+		input[i].Key.VK = key
+		input[i].Key.ExtraInfo = wordInputTag
+		if i >= 2 {
+			input[i].Key.Flags = 2 // KEYEVENTF_KEYUP
+		}
+		if key == vkRightCtrl {
+			input[i].Key.Flags |= 1 // KEYEVENTF_EXTENDEDKEY
+		}
+	}
+	if foreground, _, _ := procGetForegroundWindow.Call(); foreground != word {
+		fmt.Println("Word: активное окно изменилось, сочетание не отправлено")
+		return
+	}
+	sent, _, err := procSendInput.Call(uintptr(len(input)), uintptr(unsafe.Pointer(&input[0])), unsafe.Sizeof(input[0]))
+	if sent != uintptr(len(input)) {
+		fmt.Printf("Word: SendInput Ctrl+%c (%d/%d): %v\n", digit, sent, len(input), err)
+		return
+	}
+	fmt.Printf("Word: отправлено системное сочетание Ctrl+%c\n", digit)
 }
 
 func installAutostart() error {
@@ -340,7 +375,7 @@ func installAutostart() error {
 	sc := shortcut.Shortcut{
 		ShortcutPath: shortcutPath,
 		Target:       exe,
-		Arguments:    "start",
+		Arguments:    "--startup",
 		Description:  Description,
 		IconLocation: exe,
 		WindowStyle:  "7",
@@ -390,34 +425,51 @@ func background(cmd *exec.Cmd) {
 	cmd.Stdin = nil
 }
 
-func startBackground() {
-	cmd := exec.Command(exe, "console")
+func startBackground(pair layoutPair) error {
+	cmd := exec.Command(exe, "--background", pair[0].tip, fmt.Sprintf("%x", pair[0].hkl), pair[1].tip, fmt.Sprintf("%x", pair[1].hkl))
 	background(cmd)
 
 	if err := cmd.Start(); err != nil {
-		fmt.Printf("Ошибка запуска: %v\n", err)
-		os.Exit(1)
+		return fmt.Errorf("ошибка фонового запуска: %w", err)
 	}
+	_ = cmd.Process.Release()
+	return nil
 }
 
-func startConsole(ctx context.Context) {
+func startConsole(pair layoutPair, console bool) error {
+	runtime.LockOSThread()
+	defer runtime.UnlockOSThread()
+	switchTo = make(chan int, 8)
+	if console && vncTestMode != "" {
+		hookTrace = make(chan ctrlTrace, 64)
+		fmt.Printf("Диагностика VNC: %s\n", vncTestMode)
+	}
 	if err := setHook(); err != nil {
-		fmt.Println(err)
-		os.Exit(1)
+		return err
 	}
 	defer unhook()
-	fmt.Println("Запущена в фоновом режиме")
-	fmt.Println("Левый Ctrl -> Английский")
-	fmt.Println("Правый Ctrl -> Русский")
-	fmt.Println("Для остановки нажмите Ctrl+C")
-	messageLoop(ctx)
-}
-
-func printUsage() {
-	fmt.Println("Используй команды: install, start, uninstall, stop, console")
-	fmt.Println("По команде start остановится и запустится в фоновом режиме")
-	fmt.Println("По команде install установится в автозагрузку shell:startup остановится и запустится в фоновом режиме")
-	fmt.Println("По команде uninstall уберётся из автозагрузки shell:startup и остановится")
-	fmt.Println("Без команды или с неправильной командой остановится и запустится в фоновом режиме")
-	fmt.Println("По команде console запустится в консоле для отладки")
+	if hookTrace != nil {
+		go func() {
+			for entry := range hookTrace {
+				if entry.message != "" {
+					fmt.Println(entry.message)
+					continue
+				}
+				e := entry.event
+				fmt.Printf("Ctrl raw: msg=0x%04X vk=0x%02X scan=0x%02X flags=0x%02X injected=%t extra=0x%X time=%d ms\n",
+					entry.wm, e.VkCode, e.ScanCode, e.Flags, e.Flags&llkhfInjected != 0, e.DwExtraInfo, e.Time)
+			}
+		}()
+	}
+	go func() {
+		for index := range switchTo {
+			playBeep([2]uint{FreqEn, FreqRu}[index])
+			switchLanguage(pair[index].hkl, pair[index].tip, uint16('1'+index))
+		}
+	}()
+	if console {
+		printLayoutPair(pair)
+		fmt.Println("Для остановки нажмите Ctrl+C")
+	}
+	return messageLoop()
 }
