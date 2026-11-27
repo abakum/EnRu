@@ -291,7 +291,7 @@ func runSwitcher(console bool) error {
 	}()
 
 	if console {
-		printSetup()
+		fmt.Println("Tap left Ctrl to send Ctrl+1 or right Ctrl to send Ctrl+2.")
 		fmt.Println("Running in console mode. Press Ctrl+C to exit.")
 	}
 	var msg message

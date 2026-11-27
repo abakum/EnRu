@@ -23,7 +23,7 @@
         },
         "description": "",
         "minimum-os": "win7",
-        "execution-level": "as invoker",
+        "execution-level": "highest available",
         "ui-access": false,
         "auto-elevate": false,
         "dpi-awareness": "system",

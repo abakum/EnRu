@@ -12,6 +12,7 @@ import (
 	"runtime"
 	"strings"
 	"syscall"
+	"unsafe"
 
 	version "github.com/abakum/version/lib"
 	"github.com/jxeng/shortcut"
@@ -27,12 +28,47 @@ var _ = version.Ver
 var VERSION string
 
 const description = "c1c2 Keyboard Layout Switcher"
+const hotkeyDialog = "input.dll,,{C07337D3-DB2C-4D0B-9A93-B722A6C106E2}{HOTKEYS}"
 
 func main() {
-	if err := run(os.Args[1:]); err != nil {
+	args := os.Args[1:]
+	err := run(args)
+	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
+		if len(args) > 0 && (args[0] == "install" || args[0] == "uninstall") {
+			printManualSetup(args[0] == "install")
+		}
+	}
+	if len(args) == 0 || (args[0] != "console" && args[0] != "--background" && args[0] != "--startup") {
+		pauseConsole()
+	}
+	if err != nil {
 		os.Exit(1)
 	}
+}
+
+func pauseConsole() {
+	input, err := windows.GetStdHandle(windows.STD_INPUT_HANDLE)
+	var mode uint32
+	if err != nil || windows.GetConsoleMode(input, &mode) != nil {
+		return
+	}
+	readInput := windows.NewLazySystemDLL("kernel32.dll").NewProc("ReadConsoleInputW")
+	var record struct { // Win32 INPUT_RECORD, with only KEY_EVENT fields used.
+		eventType uint16
+		_         uint16
+		keyDown   uint32
+		_         [12]byte
+	}
+	var read uint32
+	fmt.Print("Press Any Key to continue . . .")
+	for {
+		ok, _, _ := readInput.Call(uintptr(input), uintptr(unsafe.Pointer(&record)), 1, uintptr(unsafe.Pointer(&read)))
+		if ok == 0 || (read == 1 && record.eventType == 1 && record.keyDown != 0) {
+			break
+		}
+	}
+	fmt.Println()
 }
 
 func run(args []string) error {
@@ -55,9 +91,21 @@ func run(args []string) error {
 	fmt.Printf("%s %s %s Built with %s, Windows %d.%d.%d on %s\n",
 		description, exe, strings.TrimSpace(VERSION), runtime.Version(), major, minor, build, runtime.GOARCH)
 
+	var applyHotkeySettings func() error
 	if command == "install" || command == "uninstall" {
-		if err := configureAutostart(exe, command == "install"); err != nil {
-			fmt.Fprintln(os.Stderr, err)
+		printSavedDirectHotkeys("Before")
+		defer printSavedDirectHotkeys("After")
+		applyHotkeySettings, err = prepareHotkeys(command == "install")
+		if err != nil {
+			return fmt.Errorf("cannot prepare layout shortcuts: %w", err)
+		}
+	}
+	if command == "install" {
+		if err := applyHotkeySettings(); err != nil {
+			return fmt.Errorf("cannot install layout shortcuts: %w", err)
+		}
+		if err := configureAutostart(exe, true); err != nil {
+			return fmt.Errorf("layout shortcuts are already applied, but Startup setup failed: %w", err)
 		}
 	}
 	if err := stopTask(filepath.Base(exe)); err != nil {
@@ -67,16 +115,26 @@ func run(args []string) error {
 		return err
 	}
 	switch command {
-	case "uninstall", "stop":
+	case "uninstall":
+		if err := configureAutostart(exe, false); err != nil {
+			return err
+		}
+		if err := applyHotkeySettings(); err != nil {
+			return fmt.Errorf("c1c2 stopped and Startup shortcut removed, but shortcut cleanup failed: %w", err)
+		}
+		return openHotkeySettings("Uninstall")
+	case "stop":
 		return nil
 	case "console":
 		return runSwitcher(true)
 	}
 
-	fmt.Println("Commands: install, start, uninstall, stop, console")
-	fmt.Println("install adds a Startup shortcut and starts c1c2; uninstall removes it and stops c1c2.")
-	fmt.Println("start (or no command) starts c1c2 in the background; stop ends it; console runs it in the foreground.")
-	printSetup()
+	if command != "install" {
+		fmt.Println("Commands: install, start, uninstall, stop, console")
+		fmt.Println("install assigns layout shortcuts Ctrl+1 through Ctrl+9, then Ctrl+0, adds a Startup shortcut, and starts c1c2.")
+		fmt.Println("uninstall stops c1c2 and removes the Startup shortcut and all direct layout shortcuts, including manually assigned ones.")
+		fmt.Println("start (or no command) starts c1c2 in the background; stop ends it; console runs it in the foreground.")
+	}
 	cmd := exec.Command(exe, "--background")
 	cmd.SysProcAttr = &syscall.SysProcAttr{CreationFlags: windows.CREATE_NO_WINDOW, NoInheritHandles: true}
 	if err := cmd.Start(); err != nil {
@@ -84,6 +142,23 @@ func run(args []string) error {
 	}
 	defer cmd.Process.Release()
 	fmt.Println("Started in the background.")
+	if command == "install" {
+		return openHotkeySettings("Install")
+	}
+	return nil
+}
+
+func openHotkeySettings(operation string) error {
+	dir, err := windows.GetSystemDirectory()
+	if err != nil {
+		return fmt.Errorf("%s completed, but cannot locate Advanced Key Settings launcher: %w", operation, err)
+	}
+	cmd := exec.Command(filepath.Join(dir, "rundll32.exe"), "shell32.dll,Control_RunDLL", hotkeyDialog)
+	cmd.SysProcAttr = &syscall.SysProcAttr{CreationFlags: windows.CREATE_NO_WINDOW, NoInheritHandles: true}
+	if err := cmd.Start(); err != nil {
+		return fmt.Errorf("%s completed, but cannot open Advanced Key Settings: %w", operation, err)
+	}
+	_ = cmd.Process.Release()
 	return nil
 }
 
@@ -125,7 +200,7 @@ func configureAutostart(exe string, install bool) error {
 		sc := shortcut.Shortcut{
 			ShortcutPath: path,
 			Target:       exe,
-			Arguments:    "start",
+			Arguments:    "--startup",
 			Description:  description,
 			IconLocation: exe,
 			WindowStyle:  "7",
@@ -143,10 +218,13 @@ func configureAutostart(exe string, install bool) error {
 	return nil
 }
 
-func printSetup() {
-	fmt.Println("Windows setup: open Advanced Key Settings from Command Prompt:")
-	fmt.Println("  rundll32.exe shell32.dll,Control_RunDLL input.dll,,{HOTKEYS}")
+func printManualSetup(install bool) {
+	fmt.Println("To change layout shortcuts manually, open Advanced Key Settings from Command Prompt:")
+	fmt.Println("  rundll32.exe shell32.dll,Control_RunDLL " + hotkeyDialog)
+	if !install {
+		fmt.Println("For each assigned layout: Change Key Sequence > clear Enable Key Sequence > OK. Skip 'Between input languages'. Then click Apply.")
+		return
+	}
 	fmt.Println("Select an input language > Change Key Sequence > Enable Key Sequence > assign Ctrl+1 > OK.")
 	fmt.Println("Repeat for another input language with Ctrl+2, then click Apply. Skip 'Between input languages'.")
-	fmt.Println("Tap left Ctrl to send Ctrl+1 or right Ctrl to send Ctrl+2.")
 }
